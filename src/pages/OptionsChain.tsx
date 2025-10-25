@@ -38,12 +38,27 @@ const OptionsChain: React.FC<OptionsChainProps> = ({ selectedSymbol = 'NIFTY' })
     const dates = [];
     const today = new Date();
     
-    // Add next 4 weekly expiries (Thursdays)
-    for (let i = 0; i < 4; i++) {
-      const nextThursday = new Date(today);
-      const daysUntilThursday = (4 - today.getDay() + 7) % 7 || 7;
-      nextThursday.setDate(today.getDate() + daysUntilThursday + (i * 7));
-      dates.push(format(nextThursday, 'yyyy-MM-dd'));
+    // NSE changed NIFTY options expiry from Thursdays to Tuesdays starting September 2025
+    // Check if we're in September 2025 or later
+    const isNewSchedule = today.getFullYear() > 2025 || 
+                         (today.getFullYear() === 2025 && today.getMonth() >= 8); // September = 8 (0-indexed)
+    
+    if (isNewSchedule) {
+      // New schedule: Tuesdays
+      for (let i = 0; i < 4; i++) {
+        const nextTuesday = new Date(today);
+        const daysUntilTuesday = (2 - today.getDay() + 7) % 7 || 7;
+        nextTuesday.setDate(today.getDate() + daysUntilTuesday + (i * 7));
+        dates.push(format(nextTuesday, 'yyyy-MM-dd'));
+      }
+    } else {
+      // Old schedule: Thursdays
+      for (let i = 0; i < 4; i++) {
+        const nextThursday = new Date(today);
+        const daysUntilThursday = (4 - today.getDay() + 7) % 7 || 7;
+        nextThursday.setDate(today.getDate() + daysUntilThursday + (i * 7));
+        dates.push(format(nextThursday, 'yyyy-MM-dd'));
+      }
     }
     
     return dates;

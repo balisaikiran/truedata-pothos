@@ -16,6 +16,58 @@ function formatExpiryParam(expiry?: string): string {
   return expiry;
 }
 
+// Test endpoint for debugging expiry dates
+router.get('/test-expiry/:symbol', async (req: any, res) => {
+  try {
+    const { symbol } = req.params;
+    const { expiry } = req.query as { expiry?: string };
+    
+    // Use the provided test token directly
+    const trueDataToken = 'h-sG047Z_NJufa4XjyACSi6U37uPj78xBleUMnnf7wqy5-F7vwEBTlpAjwRZzOoWt6kGa8jzNBGU7qRV3-8GY6FXSDO-b5-qd1jvi7TeeAmygk0H2PRqtZnE6qdgYYnqd2PdRyFF0RwrOAT4ZlL1u0pSYUArRA7guoGSRWXnnn1iuvp9wN8lFtjhbPcNMe_kgPpk3y32c3ucB_Gr4omm5JZmF_JV4fRlYW067yqTqOEAzNfrJJNAKAEY04gZn28cFc-V8NPGBY48QUskRo69cg';
+
+    const formattedExpiry = formatExpiryParam(expiry);
+    console.log('Test endpoint - Original expiry:', expiry);
+    console.log('Test endpoint - Formatted expiry:', formattedExpiry);
+
+    // Build params; include expiry ONLY if provided
+    const params: Record<string, any> = {
+      symbol,
+      response: 'json',
+      segment: 'fo'
+    };
+    if (formattedExpiry) {
+      params.expiry = formattedExpiry;
+    }
+
+    console.log('Test endpoint - API params:', params);
+
+    // Call Analytics API
+    const response = await axios.get(`https://analytics.truedata.in/api/getoptionchain`, {
+      params,
+      headers: {
+        'Authorization': `Bearer ${trueDataToken}`
+      }
+    });
+
+    console.log('Test endpoint - API response status:', response.status);
+    console.log('Test endpoint - Records count:', response.data?.Records?.length || 0);
+
+    res.json({
+      success: true,
+      originalExpiry: expiry,
+      formattedExpiry: formattedExpiry,
+      recordsCount: response.data?.Records?.length || 0,
+      sampleRecord: response.data?.Records?.[0] || null
+    });
+  } catch (error: any) {
+    console.error('Test endpoint error:', error.response?.data || error.message);
+    res.status(500).json({
+      success: false,
+      error: error.response?.data || error.message
+    });
+  }
+});
+
 // Get options chain for a symbol
 router.get('/chain/:symbol', authenticateToken, async (req: any, res) => {
   try {
@@ -209,7 +261,55 @@ router.get('/chain/:symbol', authenticateToken, async (req: any, res) => {
         };
 
         if (Array.isArray(data.Records)) {
-          (data.Records as any[]).forEach((rec: any) => pushFromRecord(rec));
+          // Handle flat array format from TrueData Analytics API
+          (data.Records as any[]).forEach((record: any) => {
+            if (Array.isArray(record) && record.length >= 20) {
+              // TrueData Analytics API returns flat arrays with specific indices
+              // Format: [symbol, expiry, ?, strike, ceLtp, ceOI, ceBid, ceAsk, ceVol, ceOIChange, cePriceChange, peLtp, peOI, peBid, peAsk, peVol, peOIChange, pePriceChange, ?, ?, ?]
+              const strike = record[3];
+              const ceLtp = record[4];
+              const peLtp = record[11];
+              
+              if (strike && strike !== null) {
+                // Add CE option if LTP exists
+                if (ceLtp && ceLtp !== null) {
+                  options.push({
+                    symbol: symbol,
+                    optionSymbol: `${symbol}${strike}CE`,
+                    strike: parseFloat(strike),
+                    series: 'CE',
+                    expiry: effectiveExpiry,
+                    ltp: parseFloat(ceLtp),
+                    delta: 0, // Greeks not available in this format
+                    gamma: 0,
+                    theta: 0,
+                    vega: 0,
+                    timestamp: new Date().toISOString()
+                  });
+                }
+                
+                // Add PE option if LTP exists
+                if (peLtp && peLtp !== null) {
+                  options.push({
+                    symbol: symbol,
+                    optionSymbol: `${symbol}${strike}PE`,
+                    strike: parseFloat(strike),
+                    series: 'PE',
+                    expiry: effectiveExpiry,
+                    ltp: parseFloat(peLtp),
+                    delta: 0, // Greeks not available in this format
+                    gamma: 0,
+                    theta: 0,
+                    vega: 0,
+                    timestamp: new Date().toISOString()
+                  });
+                }
+              }
+            } else {
+              // Fallback to original object-based parsing
+              pushFromRecord(record);
+            }
+          });
         } else {
           Object.entries(data.Records as Record<string, any>).forEach(([key, rec]) => {
             const strikeFromKey = parseFloat(key);
@@ -376,7 +476,54 @@ router.get('/chain/:symbol', authenticateToken, async (req: any, res) => {
             };
 
             if (Array.isArray(fData.Records)) {
-              (fData.Records as any[]).forEach((rec: any) => pushFallbackRecord(rec));
+              // Handle flat array format from TrueData Analytics API
+              (fData.Records as any[]).forEach((record: any) => {
+                if (Array.isArray(record) && record.length >= 20) {
+                  // TrueData Analytics API returns flat arrays with specific indices
+                  const strike = record[3];
+                  const ceLtp = record[4];
+                  const peLtp = record[11];
+                  
+                  if (strike && strike !== null) {
+                    // Add CE option if LTP exists
+                    if (ceLtp && ceLtp !== null) {
+                      options.push({
+                        symbol: symbol,
+                        optionSymbol: `${symbol}${strike}CE`,
+                        strike: parseFloat(strike),
+                        series: 'CE',
+                        expiry: effectiveExpiry,
+                        ltp: parseFloat(ceLtp),
+                        delta: 0, // Greeks not available in this format
+                        gamma: 0,
+                        theta: 0,
+                        vega: 0,
+                        timestamp: new Date().toISOString()
+                      });
+                    }
+                    
+                    // Add PE option if LTP exists
+                    if (peLtp && peLtp !== null) {
+                      options.push({
+                        symbol: symbol,
+                        optionSymbol: `${symbol}${strike}PE`,
+                        strike: parseFloat(strike),
+                        series: 'PE',
+                        expiry: effectiveExpiry,
+                        ltp: parseFloat(peLtp),
+                        delta: 0, // Greeks not available in this format
+                        gamma: 0,
+                        theta: 0,
+                        vega: 0,
+                        timestamp: new Date().toISOString()
+                      });
+                    }
+                  }
+                } else {
+                  // Fallback to original object-based parsing
+                  pushFallbackRecord(record);
+                }
+              });
             } else {
               Object.entries(fData.Records as Record<string, any>).forEach(([key, rec]) => {
                 const strikeFromKey = parseFloat(key);
