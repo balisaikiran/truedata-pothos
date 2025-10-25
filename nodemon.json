@@ -1,0 +1,9 @@
+{
+  "watch": ["api", "shared"],
+  "ext": "ts,js,json",
+  "ignore": ["node_modules", "dist"],
+  "exec": "tsx api/server.ts",
+  "env": {
+    "NODE_ENV": "development"
+  }
+}
