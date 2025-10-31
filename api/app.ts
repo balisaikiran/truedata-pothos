@@ -35,6 +35,14 @@ app.use('/api/symbols', symbolRoutes);
 app.use('/api/options', optionsRoutes);
 app.use('/api/fno', fnoRoutes);
 
+// Debug: Log all registered routes
+console.log('📋 Registered API Routes:');
+console.log('  - /api/auth');
+console.log('  - /api/data');
+console.log('  - /api/symbols');
+console.log('  - /api/options');
+console.log('  - /api/fno (including /option-chain/:symbol)');
+
 app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'OK', 

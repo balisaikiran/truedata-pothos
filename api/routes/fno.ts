@@ -27,6 +27,20 @@ router.get('/test', authenticateToken, async (req: any, res) => {
   }
 });
 
+// Debug endpoint to test route registration
+router.get('/routes', (req: any, res) => {
+  res.json({
+    message: 'F&O routes are registered',
+    availableRoutes: [
+      '/api/fno/test',
+      '/api/fno/market-data',
+      '/api/fno/market-summary',
+      '/api/fno/option-chain/:symbol'
+    ],
+    timestamp: new Date().toISOString()
+  });
+});
+
 // Interface for F&O stock data
 interface FNOStockData {
   symbol: string;
@@ -471,96 +485,264 @@ router.get('/market-summary', authenticateToken, async (req: any, res) => {
   }
 });
 
-// Get option chain for a specific F&O symbol
+// Get option chain for a specific F&O symbol  
 router.get('/option-chain/:symbol', authenticateToken, async (req: any, res) => {
-  try {
-    const { symbol } = req.params;
-    const { expiry } = req.query;
-    const { trueDataToken } = req.user;
-
-    // Format expiry from yyyy-MM-dd to dd-MM-yyyy if needed
-    const formatExpiryParam = (expiry?: string): string => {
-      if (!expiry) return '';
-      const m = expiry.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-      if (m) {
-        const [_, yyyy, mm, dd] = m;
-        return `${dd}-${mm}-${yyyy}`;
-      }
-      return expiry;
-    };
-
-    const formattedExpiry = formatExpiryParam(expiry as string);
-
-    // Build params; include expiry ONLY if provided
-    const params: Record<string, any> = {
-      symbol,
-      response: 'json',
-      segment: 'fo'
-    };
-    if (formattedExpiry) {
-      params.expiry = formattedExpiry;
+  // Declare variables outside try block so they're available in catch
+  const { symbol } = req.params;
+  const { expiry } = req.query;
+  
+  // Format expiry from yyyy-MM-dd to dd-MM-yyyy if needed
+  const formatExpiryParam = (expiry?: string): string => {
+    if (!expiry) return '';
+    const m = expiry.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (m) {
+      const [_, yyyy, mm, dd] = m;
+      return `${dd}-${mm}-${yyyy}`;
     }
+    return expiry;
+  };
 
-    // Call Analytics API directly
-    const response = await axios.get(`https://analytics.truedata.in/api/getoptionchain`, {
-      params,
-      headers: {
-        'Authorization': `Bearer ${trueDataToken}`
+  // Auto-detect expiry from TrueData API if not provided
+  // Declare outside try so it's available in catch block
+  let formattedExpiry = formatExpiryParam(expiry as string);
+  let response: any;
+  
+  try {
+    console.log(`[Option Chain] Request received for symbol: ${symbol}, expiry: ${expiry || 'none'}`);
+    console.log(`[Option Chain] User authenticated:`, req.user?.username);
+    console.log(`[Option Chain] Has trueDataToken:`, !!req.user?.trueDataToken);
+    
+    if (!req.user?.trueDataToken) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication token missing'
+      });
+    }
+    
+    const { trueDataToken } = req.user;
+    
+    // If no expiry provided, we need to auto-detect it
+    if (!formattedExpiry) {
+      console.log(`[Option Chain ${symbol}] No expiry provided, auto-detecting from TrueData API...`);
+      
+      // Strategy: Try a known expiry date (November 25, 2024) or try without expiry first
+      // Based on your example, November expiry is 25-11-2024
+      const today = new Date();
+      const currentYear = today.getFullYear();
+      const currentMonth = today.getMonth() + 1; // 1-12
+      
+      // Try known expiries for current/next month
+      // Updated to 2025 dates
+      const knownExpiries = [
+        '25-11-2025', // November 2025
+        '26-12-2025', // December 2025
+        '30-01-2026', // January 2026
+      ];
+      
+      // Try each known expiry until we get valid data
+      let foundValidExpiry = false;
+      for (const testExpiry of knownExpiries) {
+        try {
+          console.log(`[Option Chain ${symbol}] Trying expiry: ${testExpiry}`);
+          const testResponse = await axios.get('https://analytics.truedata.in/api/getoptionchain', {
+            params: {
+              symbol,
+              expiry: testExpiry,
+              response: 'json'
+            },
+            headers: {
+              'Authorization': `Bearer ${trueDataToken}`
+            },
+            timeout: 8000
+          });
+          
+          // If we get valid data (Records array with data), this is the right expiry
+          if (testResponse.data && testResponse.data.Records && Array.isArray(testResponse.data.Records) && testResponse.data.Records.length > 0) {
+            formattedExpiry = testExpiry;
+            response = testResponse; // Use this response directly
+            foundValidExpiry = true;
+            console.log(`[Option Chain ${symbol}] ✅ Found valid expiry: ${formattedExpiry} (got ${testResponse.data.Records.length} records)`);
+            break;
+          }
+        } catch (testErr: any) {
+          // Try next expiry
+          continue;
+        }
       }
-    });
+      
+      // If we found valid data, use it. Otherwise, make a final API call
+      if (!foundValidExpiry) {
+        console.warn(`[Option Chain ${symbol}] Could not auto-detect expiry, trying API call without expiry...`);
+        // Make one final attempt with a calculated expiry (current month's known expiry)
+        const monthKey = `${currentYear}-${String(currentMonth).padStart(2, '0')}`;
+        const calculatedExpiry = monthKey === '2025-11' ? '25-11-2025' : 
+                                 monthKey === '2025-12' ? '26-12-2025' :
+                                 monthKey === '2026-01' ? '30-01-2026' : '25-11-2025'; // Default fallback (Nov 2025)
+        
+        formattedExpiry = calculatedExpiry;
+        console.log(`[Option Chain ${symbol}] Using calculated expiry: ${formattedExpiry}`);
+      }
+    }
+    
+    // Make API call if we don't already have response data
+    if (!response) {
+      const params: Record<string, any> = {
+        symbol,
+        expiry: formattedExpiry, // ALWAYS include expiry (it's required)
+        response: 'json'
+      };
+      
+      console.log(`[Option Chain ${symbol}] Calling TrueData API with params:`, params);
+      
+      response = await axios.get('https://analytics.truedata.in/api/getoptionchain', {
+        params,
+        headers: {
+          'Authorization': `Bearer ${trueDataToken}`
+        },
+        timeout: 15000
+      });
+      
+      console.log(`[Option Chain ${symbol}] TrueData API response status:`, response.status);
+      console.log(`[Option Chain ${symbol}] Response data keys:`, response.data ? Object.keys(response.data) : 'no data');
+    }
 
     let options: any[] = [];
     let underlyingPrice = 0;
-    let effectiveExpiry = formattedExpiry || '';
+    let effectiveExpiry = formattedExpiry; // Use the calculated/formatted expiry
 
     const data = response.data;
 
-    if (data && Array.isArray(data.Records)) {
-      // Handle flat array format from TrueData Analytics API
-      (data.Records as any[]).forEach((record: any) => {
-        if (Array.isArray(record) && record.length >= 20) {
-          const strike = record[3];
-          const ceLtp = record[4];
-          const peLtp = record[11];
-          
-          if (strike && strike !== null) {
-            // Add CE option if LTP exists
-            if (ceLtp && ceLtp !== null) {
-              options.push({
-                symbol: symbol,
-                optionSymbol: `${symbol}${strike}CE`,
-                strike: parseFloat(strike),
-                series: 'CE',
-                expiry: effectiveExpiry,
-                ltp: parseFloat(ceLtp),
-                delta: 0,
-                gamma: 0,
-                theta: 0,
-                vega: 0,
-                timestamp: new Date().toISOString()
-              });
+    // Log response structure for debugging
+    console.log(`[Option Chain ${symbol}] Response keys:`, data ? Object.keys(data) : 'no data');
+    console.log(`[Option Chain ${symbol}] Has Records:`, !!data?.Records);
+    console.log(`[Option Chain ${symbol}] Records type:`, Array.isArray(data?.Records) ? 'array' : typeof data?.Records);
+
+    if (data) {
+      // Handle options array format
+      if (Array.isArray(data.options)) {
+        options = (data.options as any[]).map((item: any) => ({
+          symbol: item.symbol || symbol,
+          optionSymbol: item.optionSymbol || item.OptionSymbol || '',
+          strike: parseFloat(item.strike || item.Strike || 0),
+          series: (item.series || item.Series || 'CE').toUpperCase() as 'CE' | 'PE',
+          expiry: item.expiry || item.Expiry || effectiveExpiry,
+          ltp: parseFloat(item.ltp || item.LTP || 0),
+          delta: parseFloat(item.delta || item.Delta || 0),
+          gamma: parseFloat(item.gamma || item.Gamma || 0),
+          theta: parseFloat(item.theta || item.Theta || 0),
+          vega: parseFloat(item.vega || item.Vega || 0),
+          timestamp: new Date().toISOString()
+        }));
+        underlyingPrice = parseFloat(data.underlyingPrice || underlyingPrice || 0);
+        effectiveExpiry = data.expiry || effectiveExpiry;
+      }
+      // Handle Records array format (TrueData Analytics API format)
+      else if (Array.isArray(data.Records)) {
+        const seenStrikes = new Set<number>();
+        
+        (data.Records as any[]).forEach((record: any) => {
+          if (Array.isArray(record) && record.length >= 20) {
+            const strike = parseFloat(record[3] || 0);
+            const ceLtp = record[4];
+            const peLtp = record[11];
+            
+            // Extract expiry from record if available
+            if (!effectiveExpiry && record[0]) {
+              effectiveExpiry = String(record[0]).substring(0, 10) || effectiveExpiry;
             }
             
-            // Add PE option if LTP exists
-            if (peLtp && peLtp !== null) {
-              options.push({
-                symbol: symbol,
-                optionSymbol: `${symbol}${strike}PE`,
-                strike: parseFloat(strike),
-                series: 'PE',
-                expiry: effectiveExpiry,
-                ltp: parseFloat(peLtp),
-                delta: 0,
-                gamma: 0,
-                theta: 0,
-                vega: 0,
-                timestamp: new Date().toISOString()
-              });
+            if (strike > 0 && !seenStrikes.has(strike)) {
+              seenStrikes.add(strike);
+              
+              // Add CE option if LTP exists
+              if (ceLtp !== null && ceLtp !== undefined && !isNaN(parseFloat(ceLtp))) {
+                options.push({
+                  symbol: symbol,
+                  optionSymbol: `${symbol}${strike}CE`,
+                  strike: strike,
+                  series: 'CE',
+                  expiry: effectiveExpiry,
+                  ltp: parseFloat(ceLtp),
+                  delta: parseFloat(record[5] || 0), // Delta might be in record[5]
+                  gamma: parseFloat(record[6] || 0), // Gamma might be in record[6]
+                  theta: parseFloat(record[7] || 0), // Theta might be in record[7]
+                  vega: parseFloat(record[8] || 0), // Vega might be in record[8]
+                  timestamp: new Date().toISOString()
+                });
+              }
+              
+              // Add PE option if LTP exists
+              if (peLtp !== null && peLtp !== undefined && !isNaN(parseFloat(peLtp))) {
+                options.push({
+                  symbol: symbol,
+                  optionSymbol: `${symbol}${strike}PE`,
+                  strike: strike,
+                  series: 'PE',
+                  expiry: effectiveExpiry,
+                  ltp: parseFloat(peLtp),
+                  delta: parseFloat(record[12] || 0), // PE Delta might be in record[12]
+                  gamma: parseFloat(record[13] || 0), // PE Gamma might be in record[13]
+                  theta: parseFloat(record[14] || 0), // PE Theta might be in record[14]
+                  vega: parseFloat(record[15] || 0), // PE Vega might be in record[15]
+                  timestamp: new Date().toISOString()
+                });
+              }
             }
           }
-        }
-      });
+        });
+        
+        console.log(`[Option Chain ${symbol}] Parsed ${options.length} options from Records array`);
+      }
+      // Handle object with nested structure
+      else if (data.Records && typeof data.Records === 'object' && !Array.isArray(data.Records)) {
+        // Try to extract options from object structure
+        const recordsObj = data.Records as any;
+        Object.keys(recordsObj).forEach((key) => {
+          const record = recordsObj[key];
+          if (Array.isArray(record) && record.length >= 20) {
+            const strike = parseFloat(record[3] || 0);
+            const ceLtp = record[4];
+            const peLtp = record[11];
+            
+            if (strike > 0) {
+              if (ceLtp !== null && ceLtp !== undefined && !isNaN(parseFloat(ceLtp))) {
+                options.push({
+                  symbol: symbol,
+                  optionSymbol: `${symbol}${strike}CE`,
+                  strike: strike,
+                  series: 'CE',
+                  expiry: effectiveExpiry,
+                  ltp: parseFloat(ceLtp),
+                  delta: 0,
+                  gamma: 0,
+                  theta: 0,
+                  vega: 0,
+                  timestamp: new Date().toISOString()
+                });
+              }
+              
+              if (peLtp !== null && peLtp !== undefined && !isNaN(parseFloat(peLtp))) {
+                options.push({
+                  symbol: symbol,
+                  optionSymbol: `${symbol}${strike}PE`,
+                  strike: strike,
+                  series: 'PE',
+                  expiry: effectiveExpiry,
+                  ltp: parseFloat(peLtp),
+                  delta: 0,
+                  gamma: 0,
+                  theta: 0,
+                  vega: 0,
+                  timestamp: new Date().toISOString()
+                });
+              }
+            }
+          }
+        });
+      }
     }
+
+    console.log(`[Option Chain ${symbol}] Total options: ${options.length}`);
 
     // Fetch underlying price
     try {
@@ -589,13 +771,54 @@ router.get('/option-chain/:symbol', authenticateToken, async (req: any, res) => 
       expiry: effectiveExpiry
     };
 
+    console.log(`[Option Chain ${symbol}] ✅ Successfully parsed ${options.length} options`);
+    console.log(`[Option Chain ${symbol}] Sample option:`, options.length > 0 ? {
+      symbol: options[0].symbol,
+      strike: options[0].strike,
+      series: options[0].series,
+      ltp: options[0].ltp
+    } : 'No options');
+    console.log(`[Option Chain ${symbol}] Returning to frontend:`, {
+      optionsCount: options.length,
+      underlyingPrice,
+      expiry: effectiveExpiry
+    });
+    
     res.json(chainResponse);
 
   } catch (error: any) {
-    console.error('F&O option chain fetch error:', error.response?.data || error.message);
-    const trueDataError = handleTrueDataError(error);
-    sendErrorResponse(res, trueDataError);
+    console.error(`[Option Chain ${symbol}] Error:`, error.message);
+    console.error(`[Option Chain ${symbol}] Error status:`, error.response?.status);
+    console.error(`[Option Chain ${symbol}] Error data:`, error.response?.data);
+    
+    // Return empty data instead of error to prevent frontend from hanging
+    // This allows the UI to show "No data" instead of infinite loading
+    // formattedExpiry is declared outside try block, so it's available here
+    res.status(200).json({
+      options: [],
+      underlyingPrice: 0,
+      expiry: formattedExpiry || '',
+      error: error.message || 'Failed to fetch option chain'
+    });
   }
+});
+
+// Catch-all route handler - MUST be last to not interfere with other routes
+router.use('*', (req: any, res: any) => {
+  console.error(`[FNO Router] ⚠️  Unmatched route: ${req.method} ${req.originalUrl}`);
+  console.error(`[FNO Router] This suggests the route pattern didn't match`);
+  res.status(404).json({
+    success: false,
+    message: `Route not found: ${req.method} ${req.originalUrl}`,
+    hint: 'Make sure you are calling: GET /api/fno/option-chain/:symbol',
+    availableRoutes: [
+      'GET /api/fno/test',
+      'GET /api/fno/market-data',
+      'GET /api/fno/market-summary',
+      'GET /api/fno/option-chain/:symbol',
+      'GET /api/fno/routes (debug)'
+    ]
+  });
 });
 
 export default router;

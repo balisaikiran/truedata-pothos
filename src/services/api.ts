@@ -273,12 +273,21 @@ class ApiService {
   }
 
   async getFNOOptionChain(symbol: string, expiry?: string): Promise<OptionsChainResponse> {
+    console.log(`[API Service] Fetching option chain for ${symbol}, expiry: ${expiry || 'none'}`);
+    console.log(`[API Service] Full URL will be: /api/fno/option-chain/${symbol}${expiry ? `?expiry=${expiry}` : ''}`);
+    
     const response: AxiosResponse<OptionsChainResponse> = await this.api.get(
-      `/api/fno/option-chain/${symbol}`,
+      `/api/fno/option-chain/${encodeURIComponent(symbol)}`, // URL encode the symbol
       {
-        params: { expiry },
+        params: expiry ? { expiry } : {},
       }
     );
+    
+    console.log(`[API Service] Option chain response received for ${symbol}:`, {
+      optionsCount: response.data?.options?.length || 0,
+      underlyingPrice: response.data?.underlyingPrice || 0
+    });
+    
     return response.data;
   }
 

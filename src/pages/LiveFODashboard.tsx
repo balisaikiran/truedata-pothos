@@ -61,6 +61,14 @@ const LiveFODashboard = () => {
   const [selectedStock, setSelectedStock] = useState<string | null>(null);
   const [expandedChains, setExpandedChains] = useState<Record<string, boolean>>({});
   const [optionChains, setOptionChains] = useState<Record<string, OptionData[]>>({});
+  const [loadingChains, setLoadingChains] = useState<Record<string, boolean>>({});
+  const [underlyingPrices, setUnderlyingPrices] = useState<Record<string, number>>({}); // Store underlying prices from option chain API
+  const [selectedSymbolForChain, setSelectedSymbolForChain] = useState<string>('');
+  const [standaloneChain, setStandaloneChain] = useState<{
+    symbol: string;
+    spot: number;
+    options: OptionData[];
+  } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filterOptions, setFilterOptions] = useState({
@@ -139,15 +147,67 @@ const LiveFODashboard = () => {
   // Fetch option chain for a specific stock
   const fetchOptionChain = async (symbol: string) => {
     try {
-      if (optionChains[symbol]) return; // Already fetched
-
+      setLoadingChains(prev => ({ ...prev, [symbol]: true }));
+      console.log(`Fetching option chain for ${symbol}...`);
+      
+      // Always fetch to get latest data
       const response = await apiService.getFNOOptionChain(symbol);
+      console.log(`Option chain response for ${symbol}:`, response);
+      console.log(`Options count: ${response.options?.length || 0}`);
+      console.log(`Response structure:`, {
+        hasOptions: !!response.options,
+        optionsType: Array.isArray(response.options) ? 'array' : typeof response.options,
+        optionsLength: Array.isArray(response.options) ? response.options.length : 'N/A',
+        underlyingPrice: response.underlyingPrice,
+        expiry: response.expiry
+      });
+      
+      // Ensure we have an array
+      const optionsArray = Array.isArray(response.options) ? response.options : [];
+      
+      if (optionsArray.length > 0) {
+        console.log(`Sample option:`, {
+          symbol: optionsArray[0].symbol,
+          strike: optionsArray[0].strike,
+          series: optionsArray[0].series,
+          ltp: optionsArray[0].ltp
+        });
+        
+        // Log strike range
+        const strikes = Array.from(new Set(optionsArray.map(o => o.strike))).sort((a, b) => a - b);
+        console.log(`Strike range: ${strikes[0]} to ${strikes[strikes.length - 1]}`);
+        console.log(`Underlying price from API: ${response.underlyingPrice}`);
+      }
+      
       setOptionChains(prev => ({
         ...prev,
-        [symbol]: response.options
+        [symbol]: optionsArray
       }));
+      
+      // Store underlying price from API response for accurate strike calculations
+      if (response.underlyingPrice && response.underlyingPrice > 0) {
+        setUnderlyingPrices(prev => ({
+          ...prev,
+          [symbol]: response.underlyingPrice
+        }));
+        console.log(`[${symbol}] Stored underlying price from option chain: ${response.underlyingPrice} (vs stock spot: ${stocks.find(s => s.symbol === symbol)?.spot || 'N/A'})`);
+      }
+      
+      setLoadingChains(prev => ({ ...prev, [symbol]: false }));
     } catch (err: any) {
       console.error(`Error fetching option chain for ${symbol}:`, err);
+      console.error(`Error details:`, {
+        message: err.message,
+        status: err.response?.status,
+        statusText: err.response?.statusText,
+        data: err.response?.data,
+        url: err.config?.url
+      });
+      setOptionChains(prev => ({
+        ...prev,
+        [symbol]: []
+      }));
+      setLoadingChains(prev => ({ ...prev, [symbol]: false }));
     }
   };
 
@@ -217,31 +277,126 @@ const LiveFODashboard = () => {
     }
   };
 
-  const generateOptionStrikes = (stock: FNOStockData, options: OptionData[]) => {
-    const strikes = [];
-    const baseStrike = Math.round(stock.spot / 100) * 100;
-    
-    for (let i = -5; i <= 5; i++) {
-      const strike = baseStrike + (i * 100);
-      const moneyness = ((stock.spot - strike) / stock.spot) * 100;
-      
-      // Find call and put options for this strike
-      const callOption = options.find(opt => opt.strike === strike && opt.series === 'CE');
-      const putOption = options.find(opt => opt.strike === strike && opt.series === 'PE');
-      
-      strikes.push({
-        strike,
-        callBid: callOption ? callOption.ltp * 0.95 : 0,
-        callAsk: callOption ? callOption.ltp * 1.05 : 0,
-        callOI: Math.floor(Math.random() * 1000000), // Mock OI data
-        putBid: putOption ? putOption.ltp * 0.95 : 0,
-        putAsk: putOption ? putOption.ltp * 1.05 : 0,
-        putOI: Math.floor(Math.random() * 1000000), // Mock OI data
-        moneyness
-      });
+  // Fetch standalone option chain for selected symbol from dropdown
+  const fetchStandaloneOptionChain = async (symbol: string) => {
+    if (!symbol) {
+      setStandaloneChain(null);
+      return;
     }
     
-    return strikes;
+    try {
+      console.log(`Fetching standalone option chain for ${symbol}...`);
+      const response = await apiService.getFNOOptionChain(symbol);
+      console.log(`Standalone option chain response for ${symbol}:`, response);
+      
+      // Get spot price from stocks list or fetch separately
+      const stockData = stocks.find(s => s.symbol === symbol);
+      const spotPrice = stockData?.spot || response.underlyingPrice || 0;
+      
+      setStandaloneChain({
+        symbol,
+        spot: spotPrice,
+        options: response.options || []
+      });
+    } catch (err: any) {
+      console.error(`Error fetching standalone option chain for ${symbol}:`, err);
+      console.error(`Error details:`, {
+        message: err.message,
+        status: err.response?.status,
+        statusText: err.response?.statusText,
+        data: err.response?.data,
+        url: err.config?.url
+      });
+      setStandaloneChain(null);
+    }
+  };
+
+  // Filter option strikes to show +5%, +10%, +15%, +20% bands from spot
+  const getFilteredStrikes = (spot: number, options: OptionData[]) => {
+    if (!options || options.length === 0) {
+      console.warn('getFilteredStrikes: No options provided');
+      return [];
+    }
+    
+    console.log(`getFilteredStrikes called with spot: ${spot}, options count: ${options.length}`);
+    console.log(`Sample strikes:`, options.slice(0, 5).map(o => o.strike));
+    
+    const targetPercentages = [5, 10, 15, 20]; // +5%, +10%, +15%, +20%
+    const strikes: Array<{
+      strike: number;
+      percentage: number;
+      callOption?: OptionData;
+      putOption?: OptionData;
+    }> = [];
+
+    // Calculate target strike prices
+    targetPercentages.forEach(percent => {
+      const targetStrike = Math.round(spot * (1 + percent / 100));
+      
+      // Find closest available strikes (more flexible tolerance - up to 5% away)
+      const tolerance = spot * 0.05; // Increased from 2% to 5%
+      
+      // Find the closest matching strikes
+      const allMatchingCalls = options.filter(opt => 
+        opt.series === 'CE' && 
+        Math.abs(opt.strike - targetStrike) <= tolerance
+      );
+      
+      const allMatchingPuts = options.filter(opt => 
+        opt.series === 'PE' && 
+        Math.abs(opt.strike - targetStrike) <= tolerance
+      );
+      
+      // Get the closest one to target
+      const callOption = allMatchingCalls.length > 0
+        ? allMatchingCalls.reduce((closest, opt) => 
+            Math.abs(opt.strike - targetStrike) < Math.abs(closest.strike - targetStrike) ? opt : closest
+          )
+        : undefined;
+      
+      const putOption = allMatchingPuts.length > 0
+        ? allMatchingPuts.reduce((closest, opt) => 
+            Math.abs(opt.strike - targetStrike) < Math.abs(closest.strike - targetStrike) ? opt : closest
+          )
+        : undefined;
+
+      // Use the strike from whichever option we found (prefer call if both exist)
+      const strike = callOption?.strike || putOption?.strike || targetStrike;
+      
+      if (callOption || putOption) {
+        strikes.push({
+          strike,
+          percentage: percent,
+          callOption,
+          putOption
+        });
+      } else {
+        console.log(`No option found for ${percent}% target (${targetStrike}) within tolerance`);
+      }
+    });
+
+    // Also add ATM (At The Money) strike if available
+    // Find the closest strike to spot price
+    const allStrikes = Array.from(new Set(options.map(o => o.strike))).sort((a, b) => a - b);
+    const closestToSpot = allStrikes.reduce((closest, strike) => 
+      Math.abs(strike - spot) < Math.abs(closest - spot) ? strike : closest
+    );
+    
+    const atmCall = options.find(opt => opt.strike === closestToSpot && opt.series === 'CE');
+    const atmPut = options.find(opt => opt.strike === closestToSpot && opt.series === 'PE');
+    
+    if ((atmCall || atmPut) && !strikes.find(s => s.strike === closestToSpot)) {
+      strikes.unshift({
+        strike: closestToSpot,
+        percentage: 0,
+        callOption: atmCall,
+        putOption: atmPut
+      });
+    }
+
+    console.log(`getFilteredStrikes returning ${strikes.length} strikes:`, strikes.map(s => ({ strike: s.strike, percent: s.percentage })));
+    
+    return strikes.sort((a, b) => a.strike - b.strike);
   };
 
   if (loading) {
@@ -351,6 +506,128 @@ const LiveFODashboard = () => {
         </div>
       )}
 
+      {/* Symbol Selector for Option Chain */}
+      <div className="bg-gray-800 p-4 rounded-lg mb-6">
+        <div className="flex gap-4 items-center flex-wrap">
+          <div className="flex items-center gap-2">
+            <label className="text-gray-300 font-semibold">View Option Chain:</label>
+            <select
+              value={selectedSymbolForChain}
+              onChange={(e) => {
+                setSelectedSymbolForChain(e.target.value);
+                fetchStandaloneOptionChain(e.target.value);
+              }}
+              className="px-3 py-2 bg-gray-700 text-gray-200 rounded border border-gray-600 focus:outline-none focus:border-blue-500 min-w-[150px]"
+            >
+              <option value="">Select Symbol</option>
+              {stocks.map(stock => (
+                <option key={stock.symbol} value={stock.symbol}>
+                  {stock.symbol} (₹{stock.spot.toFixed(2)})
+                </option>
+              ))}
+            </select>
+            {selectedSymbolForChain && (
+              <button
+                onClick={() => fetchStandaloneOptionChain(selectedSymbolForChain)}
+                className="px-3 py-2 bg-blue-600 hover:bg-blue-700 rounded text-white text-sm"
+              >
+                Refresh
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Standalone Option Chain Display */}
+      {standaloneChain && (
+        <div className="bg-gray-800 rounded-lg overflow-hidden mb-6">
+          <div className="p-4 border-b border-gray-700 flex items-center justify-between">
+            <h2 className="text-xl font-semibold text-gray-300">
+              Option Chain - {standaloneChain.symbol} (Spot: ₹{standaloneChain.spot.toFixed(2)})
+            </h2>
+            <button
+              onClick={() => setStandaloneChain(null)}
+              className="px-3 py-1 bg-red-600 hover:bg-red-700 rounded text-white text-sm"
+            >
+              Close
+            </button>
+          </div>
+          <div className="p-4">
+            {standaloneChain.options.length > 0 ? (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-700">
+                    <tr>
+                      <th className="px-3 py-2 text-left text-gray-300">Strike</th>
+                      <th className="px-3 py-2 text-left text-gray-300">% from Spot</th>
+                      <th className="px-3 py-2 text-center text-gray-300" colSpan={2}>CALL (CE)</th>
+                      <th className="px-3 py-2 text-center text-gray-300" colSpan={2}>PUT (PE)</th>
+                    </tr>
+                    <tr>
+                      <th></th>
+                      <th></th>
+                      <th className="px-2 py-1 text-center text-blue-400 text-xs">LTP</th>
+                      <th className="px-2 py-1 text-center text-blue-400 text-xs">Delta</th>
+                      <th className="px-2 py-1 text-center text-red-400 text-xs">LTP</th>
+                      <th className="px-2 py-1 text-center text-red-400 text-xs">Delta</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {getFilteredStrikes(standaloneChain.spot, standaloneChain.options).map((strikeData) => {
+                      const actualPercent = ((strikeData.strike - standaloneChain.spot) / standaloneChain.spot) * 100;
+                      return (
+                        <tr key={strikeData.strike} className="border-t border-gray-700 hover:bg-gray-750">
+                          <td className="px-3 py-2 font-semibold text-gray-300">
+                            ₹{strikeData.strike}
+                          </td>
+                          <td className={`px-3 py-2 ${
+                            Math.abs(actualPercent) < 0.5 ? 'text-yellow-400' : 
+                            actualPercent > 0 ? 'text-green-400' : 'text-red-400'
+                          }`}>
+                            {actualPercent >= 0 ? '+' : ''}{actualPercent.toFixed(1)}%
+                          </td>
+                          <td className="px-2 py-2 text-center text-blue-400">
+                            {strikeData.callOption ? `₹${strikeData.callOption.ltp.toFixed(2)}` : '-'}
+                          </td>
+                          <td className="px-2 py-2 text-center text-gray-400 text-xs">
+                            {strikeData.callOption ? parseFloat(strikeData.callOption.delta.toString()).toFixed(3) : '-'}
+                          </td>
+                          <td className="px-2 py-2 text-center text-red-400">
+                            {strikeData.putOption ? `₹${strikeData.putOption.ltp.toFixed(2)}` : '-'}
+                          </td>
+                          <td className="px-2 py-2 text-center text-gray-400 text-xs">
+                            {strikeData.putOption ? parseFloat(strikeData.putOption.delta.toString()).toFixed(3) : '-'}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {getFilteredStrikes(standaloneChain.spot, standaloneChain.options).length === 0 && (
+                      <tr>
+                        <td colSpan={6} className="px-3 py-4 text-center text-gray-500">
+                          No option chain data available for strikes at +5%, +10%, +15%, +20% bands.
+                          <br />
+                          <span className="text-xs">Total options available: {standaloneChain.options.length}</span>
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+                <div className="mt-3 text-xs text-gray-500">
+                  Showing strikes at: ATM, +5%, +10%, +15%, +20% from spot price (₹{standaloneChain.spot.toFixed(2)})
+                  <br />
+                  Total options available: {standaloneChain.options.length}
+                </div>
+              </div>
+            ) : (
+              <div className="text-sm text-gray-400 flex items-center gap-2">
+                <Activity className="w-4 h-4 animate-spin" />
+                Loading option chain data...
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Filters */}
       <div className="bg-gray-800 p-4 rounded-lg mb-6">
         <div className="flex gap-4 items-center">
@@ -448,19 +725,203 @@ const LiveFODashboard = () => {
                 {/* Expanded Option Chain */}
                 {expandedChains[stock.symbol] && (
                   <tr>
-                    <td colSpan="9" className="px-4 py-4 bg-gray-850">
-                      <div className="mb-2 font-semibold text-gray-300">
-                        Option Chain - {stock.symbol} (Spot: {stock.spot.toFixed(2)})
+                    <td colSpan="9" className="px-4 py-4 bg-gray-900">
+                      <div className="mb-3 font-semibold text-gray-300 flex items-center justify-between">
+                        <span>Option Chain - {stock.symbol} (Spot: ₹{stock.spot.toFixed(2)})</span>
+                        <button
+                          onClick={() => fetchOptionChain(stock.symbol)}
+                          className="text-sm px-3 py-1 bg-blue-600 hover:bg-blue-700 rounded text-white"
+                        >
+                          Refresh Chain
+                        </button>
                       </div>
-                      {optionChains[stock.symbol] ? (
-                        <div className="text-sm text-gray-400">
+                      
+                      {loadingChains[stock.symbol] ? (
+                        <div className="text-sm text-gray-400 flex items-center gap-2">
+                          <Activity className="w-4 h-4 animate-spin" />
                           Loading option chain data...
+                        </div>
+                      ) : (() => {
+                        const hasData = optionChains[stock.symbol] && optionChains[stock.symbol].length > 0;
+                        
+                        // Use underlying price from option chain API response if available (more accurate)
+                        // Otherwise fall back to stock spot price
+                        const underlyingPrice = underlyingPrices[stock.symbol] || stock.spot;
+                        
+                        console.log(`[${stock.symbol} Render] Using price: ${underlyingPrice} (from API: ${underlyingPrices[stock.symbol] || 'N/A'}, stock spot: ${stock.spot})`);
+                        
+                        const filteredStrikes = hasData ? getFilteredStrikes(underlyingPrice, optionChains[stock.symbol]) : [];
+                        
+                        console.log(`[UI Render ${stock.symbol}]`, {
+                          hasData,
+                          optionsCount: optionChains[stock.symbol]?.length || 0,
+                          spot: underlyingPrice,
+                          filteredStrikesCount: filteredStrikes.length,
+                          isLoading: loadingChains[stock.symbol]
+                        });
+                        
+                        // If we have data but no filtered strikes match, show all strikes instead
+                        if (hasData && filteredStrikes.length === 0 && optionChains[stock.symbol].length > 0) {
+                          // Show a sample of available strikes instead
+                          const allStrikes = Array.from(new Set(optionChains[stock.symbol].map(o => o.strike))).sort((a, b) => a - b);
+                          console.warn(`No filtered strikes found. Available strikes:`, allStrikes.slice(0, 10));
+                          
+                          // Create strikes from actual available strikes (show closest to spot and a few others)
+                          const closestStrikes = allStrikes
+                            .filter(s => Math.abs(s - underlyingPrice) / underlyingPrice <= 0.25) // Within 25% of spot
+                            .slice(0, 5); // Take top 5 closest
+                          
+                          if (closestStrikes.length > 0) {
+                            const fallbackStrikes = closestStrikes.map(strike => {
+                              const callOpt = optionChains[stock.symbol].find(o => o.strike === strike && o.series === 'CE');
+                              const putOpt = optionChains[stock.symbol].find(o => o.strike === strike && o.series === 'PE');
+                              return {
+                                strike,
+                                percentage: ((strike - underlyingPrice) / underlyingPrice) * 100,
+                                callOption: callOpt,
+                                putOption: putOpt
+                              };
+                            });
+                            
+                            return (
+                              <div className="overflow-x-auto">
+                                <div className="mb-2 text-xs text-yellow-400">
+                                  ⚠️ Showing closest available strikes (could not find exact +5%, +10%, +15%, +20% matches)
+                                </div>
+                                <table className="w-full text-sm">
+                                  <thead className="bg-gray-800">
+                                    <tr>
+                                      <th className="px-3 py-2 text-left text-gray-400">Strike</th>
+                                      <th className="px-3 py-2 text-left text-gray-400">% from Spot</th>
+                                      <th className="px-3 py-2 text-center text-gray-400" colSpan={2}>CALL (CE)</th>
+                                      <th className="px-3 py-2 text-center text-gray-400" colSpan={2}>PUT (PE)</th>
+                                    </tr>
+                                    <tr>
+                                      <th></th>
+                                      <th></th>
+                                      <th className="px-2 py-1 text-center text-blue-400 text-xs">LTP</th>
+                                      <th className="px-2 py-1 text-center text-blue-400 text-xs">Delta</th>
+                                      <th className="px-2 py-1 text-center text-red-400 text-xs">LTP</th>
+                                      <th className="px-2 py-1 text-center text-red-400 text-xs">Delta</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {fallbackStrikes.map((strikeData) => {
+                                      const actualPercent = ((strikeData.strike - underlyingPrice) / underlyingPrice) * 100;
+                                      return (
+                                        <tr key={strikeData.strike} className="border-t border-gray-700 hover:bg-gray-800">
+                                          <td className="px-3 py-2 font-semibold text-gray-300">
+                                            ₹{strikeData.strike}
+                                          </td>
+                                          <td className={`px-3 py-2 ${
+                                            Math.abs(actualPercent) < 0.5 ? 'text-yellow-400' : 
+                                            actualPercent > 0 ? 'text-green-400' : 'text-red-400'
+                                          }`}>
+                                            {actualPercent >= 0 ? '+' : ''}{actualPercent.toFixed(1)}%
+                                          </td>
+                                          <td className="px-2 py-2 text-center text-blue-400">
+                                            {strikeData.callOption ? `₹${strikeData.callOption.ltp.toFixed(2)}` : '-'}
+                                          </td>
+                                          <td className="px-2 py-2 text-center text-gray-400 text-xs">
+                                            {strikeData.callOption ? parseFloat(strikeData.callOption.delta.toString()).toFixed(3) : '-'}
+                                          </td>
+                                          <td className="px-2 py-2 text-center text-red-400">
+                                            {strikeData.putOption ? `₹${strikeData.putOption.ltp.toFixed(2)}` : '-'}
+                                          </td>
+                                          <td className="px-2 py-2 text-center text-gray-400 text-xs">
+                                            {strikeData.putOption ? parseFloat(strikeData.putOption.delta.toString()).toFixed(3) : '-'}
+                                          </td>
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                </table>
+                                <div className="mt-3 text-xs text-gray-500">
+                                  Spot: ₹{underlyingPrice.toFixed(2)} | Total options: {optionChains[stock.symbol].length}
+                                </div>
+                              </div>
+                            );
+                          }
+                        }
+                        
+                        return hasData && filteredStrikes.length > 0 ? (
+                          <div className="overflow-x-auto">
+                          <table className="w-full text-sm">
+                            <thead className="bg-gray-800">
+                              <tr>
+                                <th className="px-3 py-2 text-left text-gray-400">Strike</th>
+                                <th className="px-3 py-2 text-left text-gray-400">% from Spot</th>
+                                <th className="px-3 py-2 text-center text-gray-400" colSpan={2}>CALL (CE)</th>
+                                <th className="px-3 py-2 text-center text-gray-400" colSpan={2}>PUT (PE)</th>
+                              </tr>
+                              <tr>
+                                <th></th>
+                                <th></th>
+                                <th className="px-2 py-1 text-center text-blue-400 text-xs">LTP</th>
+                                <th className="px-2 py-1 text-center text-blue-400 text-xs">Delta</th>
+                                <th className="px-2 py-1 text-center text-red-400 text-xs">LTP</th>
+                                <th className="px-2 py-1 text-center text-red-400 text-xs">Delta</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {filteredStrikes.map((strikeData) => {
+                                const actualPercent = ((strikeData.strike - underlyingPrice) / underlyingPrice) * 100;
+                                return (
+                                  <tr key={strikeData.strike} className="border-t border-gray-700 hover:bg-gray-800">
+                                    <td className="px-3 py-2 font-semibold text-gray-300">
+                                      ₹{strikeData.strike}
+                                    </td>
+                                    <td className={`px-3 py-2 ${
+                                      Math.abs(actualPercent) < 0.5 ? 'text-yellow-400' : 
+                                      actualPercent > 0 ? 'text-green-400' : 'text-red-400'
+                                    }`}>
+                                      {actualPercent >= 0 ? '+' : ''}{actualPercent.toFixed(1)}%
+                                    </td>
+                                    <td className="px-2 py-2 text-center text-blue-400">
+                                      {strikeData.callOption ? `₹${strikeData.callOption.ltp.toFixed(2)}` : '-'}
+                                    </td>
+                                    <td className="px-2 py-2 text-center text-gray-400 text-xs">
+                                      {strikeData.callOption ? parseFloat(strikeData.callOption.delta.toString()).toFixed(3) : '-'}
+                                    </td>
+                                    <td className="px-2 py-2 text-center text-red-400">
+                                      {strikeData.putOption ? `₹${strikeData.putOption.ltp.toFixed(2)}` : '-'}
+                                    </td>
+                                    <td className="px-2 py-2 text-center text-gray-400 text-xs">
+                                      {strikeData.putOption ? parseFloat(strikeData.putOption.delta.toString()).toFixed(3) : '-'}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                          
+                          {/* Show available strikes info */}
+                          <div className="mt-3 text-xs text-gray-500">
+                            Showing strikes at: ATM, +5%, +10%, +15%, +20% from spot price (₹{underlyingPrice.toFixed(2)})
+                            <br />
+                            Total options available: {optionChains[stock.symbol].length}
+                          </div>
+                        </div>
+                        ) : hasData ? (
+                        <div className="text-sm text-gray-400 p-3 bg-gray-800 rounded">
+                          <div className="mb-2 text-green-400">✅ Received {optionChains[stock.symbol].length} options from API</div>
+                          <div className="mb-2 text-yellow-400">⚠️ No strikes match +5%, +10%, +15%, +20% for spot ₹{stock.spot.toFixed(2)}</div>
+                          <div className="text-xs text-gray-500 mb-2">
+                            Available strikes: {Array.from(new Set(optionChains[stock.symbol].map(o => o.strike))).sort((a,b) => a-b).slice(0, 20).join(', ')}
+                            {Array.from(new Set(optionChains[stock.symbol].map(o => o.strike))).length > 20 && '...'}
+                          </div>
+                          <div className="text-xs text-blue-400">
+                            💡 Use the dropdown selector above to view all available strikes
+                          </div>
                         </div>
                       ) : (
                         <div className="text-sm text-gray-400">
-                          No option chain data available
+                          {optionChains[stock.symbol] && optionChains[stock.symbol].length === 0
+                            ? 'No option chain data available. Please check if the symbol has active options.'
+                            : 'No data available. Click "Refresh Chain" to try again.'}
                         </div>
                       )}
+                      )()}  {/* Close the IIFE */}
                     </td>
                   </tr>
                 )}
