@@ -114,3 +114,40 @@ export interface WebSocketMessage {
   data?: any;
   error?: string;
 }
+
+// F&O specific interfaces
+export interface FNOStockData {
+  symbol: string;
+  spot: number;
+  change: number;
+  changePercent: number;
+  volume: number;
+  iv: number;
+  ivRank: number;
+  ivPercentile: number;
+  gammaSignal: boolean;
+  timestamp: string;
+}
+
+export interface FNOMarketSummary {
+  activeSignals: number;
+  avgIV: number;
+  topGainer: string;
+  topLoser: string;
+  totalStocks: number;
+}
+
+export interface FNOOptionStrike {
+  strike: number;
+  callBid: number;
+  callAsk: number;
+  callOI: number;
+  putBid: number;
+  putAsk: number;
+  putOI: number;
+  moneyness: number;
+}
+
+export interface FNOStockWithChain extends FNOStockData {
+  strikes: FNOOptionStrike[];
+}

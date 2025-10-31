@@ -7,7 +7,10 @@ import {
   Symbol, 
   SymbolSearchResponse, 
   OptionsChainResponse, 
-  OptionData 
+  OptionData,
+  FNOStockData,
+  FNOMarketSummary,
+  FNOStockWithChain
 } from '../../shared/types';
 
 class ApiService {
@@ -240,6 +243,41 @@ class ApiService {
   async getOptionLTP(symbol: string): Promise<OptionData> {
     const response: AxiosResponse<OptionData> = await this.api.get(
       `/api/options/ltp/${symbol}`
+    );
+    return response.data;
+  }
+
+  // F&O endpoints
+  async testFNOAuth(): Promise<{ success: boolean; message: string; user: string; timestamp: string }> {
+    console.log('Testing F&O authentication...');
+    const response: AxiosResponse<{ success: boolean; message: string; user: string; timestamp: string }> = 
+      await this.api.get('/api/fno/test');
+    console.log('F&O auth test response:', response.data);
+    return response.data;
+  }
+
+  async getFNOMarketData(): Promise<{ stocks: FNOStockData[]; fromCache: boolean; timestamp: string }> {
+    console.log('Making request to /api/fno/market-data');
+    const response: AxiosResponse<{ stocks: FNOStockData[]; fromCache: boolean; timestamp: string }> = 
+      await this.api.get('/api/fno/market-data');
+    console.log('F&O market data response:', response.data);
+    return response.data;
+  }
+
+  async getFNOMarketSummary(): Promise<{ summary: FNOMarketSummary; fromCache: boolean; timestamp: string }> {
+    console.log('Making request to /api/fno/market-summary');
+    const response: AxiosResponse<{ summary: FNOMarketSummary; fromCache: boolean; timestamp: string }> = 
+      await this.api.get('/api/fno/market-summary');
+    console.log('F&O market summary response:', response.data);
+    return response.data;
+  }
+
+  async getFNOOptionChain(symbol: string, expiry?: string): Promise<OptionsChainResponse> {
+    const response: AxiosResponse<OptionsChainResponse> = await this.api.get(
+      `/api/fno/option-chain/${symbol}`,
+      {
+        params: { expiry },
+      }
     );
     return response.data;
   }

@@ -7,6 +7,7 @@ import authRoutes from './routes/auth';
 import dataRoutes from './routes/data';
 import symbolRoutes from './routes/symbols';
 import optionsRoutes from './routes/options';
+import fnoRoutes from './routes/fno';
 import WebSocketService from './services/websocketService';
 
 dotenv.config();
@@ -32,6 +33,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/data', dataRoutes);
 app.use('/api/symbols', symbolRoutes);
 app.use('/api/options', optionsRoutes);
+app.use('/api/fno', fnoRoutes);
 
 app.get('/api/health', (req, res) => {
   res.json({ 

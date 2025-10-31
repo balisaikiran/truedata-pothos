@@ -13,7 +13,8 @@ import {
   Activity,
   PieChart,
   Sun,
-  Moon
+  Moon,
+  Zap
 } from 'lucide-react';
 
 interface LayoutProps {
@@ -36,6 +37,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
 
   const navigation = [
     { name: 'Dashboard', id: 'dashboard', icon: BarChart3, path: '/dashboard' },
+    { name: 'F&O Dashboard', id: 'fno-dashboard', icon: Zap, path: '/fno-dashboard' },
     { name: 'Historical Analysis', id: 'historical', icon: TrendingUp, path: '/historical' },
     { name: 'Options Chain', id: 'options', icon: PieChart, path: '/options' },
     { name: 'Symbol Search', id: 'symbols', icon: Search, path: '/symbols' },

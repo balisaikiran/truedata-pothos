@@ -10,6 +10,7 @@ import HistoricalAnalysis from './pages/HistoricalAnalysis';
 import OptionsChain from './pages/OptionsChain';
 import SymbolSearch from './pages/SymbolSearch';
 import Settings from './pages/Settings';
+import LiveFODashboard from './pages/LiveFODashboard';
 import LoginForm from './components/auth/LoginForm';
 
 function App() {
@@ -60,6 +61,13 @@ function App() {
               <ProtectedRoute>
                 <Layout>
                   <Settings />
+                </Layout>
+              </ProtectedRoute>
+            } />
+            <Route path="/fno-dashboard" element={
+              <ProtectedRoute>
+                <Layout>
+                  <LiveFODashboard />
                 </Layout>
               </ProtectedRoute>
             } />
