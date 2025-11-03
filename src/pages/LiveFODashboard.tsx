@@ -75,10 +75,10 @@ const LiveFODashboard = () => {
     onlySignals: false,
     minIV: 0,
     maxIV: 100,
-    sortBy: 'change' as 'change' | 'iv' | 'volume'
+    sortBy: 'change' as 'change' | 'iv' | 'volume' | 'symbol' | 'spot'
   });
   const [lastUpdate, setLastUpdate] = useState(new Date());
-  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [autoRefresh, setAutoRefresh] = useState(false);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Fetch market data
@@ -260,6 +260,10 @@ const LiveFODashboard = () => {
       filtered.sort((a, b) => b.iv - a.iv);
     } else if (filterOptions.sortBy === 'volume') {
       filtered.sort((a, b) => b.volume - a.volume);
+    } else if (filterOptions.sortBy === 'symbol') {
+      filtered.sort((a, b) => a.symbol.localeCompare(b.symbol));
+    } else if (filterOptions.sortBy === 'spot') {
+      filtered.sort((a, b) => b.spot - a.spot);
     }
 
     return filtered;
@@ -678,12 +682,21 @@ const LiveFODashboard = () => {
         <table className="w-full">
           <thead className="bg-gray-700">
             <tr>
-              <th className="px-4 py-2 text-left">Symbol</th>
-              <th className="px-4 py-2 text-right">Spot</th>
-              <th className="px-4 py-2 text-right">Change %</th>
-              <th className="px-4 py-2 text-right">Volume</th>
-              <th className="px-4 py-2 text-right">IV</th>
-              <th className="px-4 py-2 text-right">IV Rank</th>
+              <th className="px-4 py-2 text-left cursor-pointer hover:bg-gray-600" onClick={() => setFilterOptions({...filterOptions, sortBy: 'symbol'})}>
+                Symbol {filterOptions.sortBy === 'symbol' && '▼'}
+              </th>
+              <th className="px-4 py-2 text-right cursor-pointer hover:bg-gray-600" onClick={() => setFilterOptions({...filterOptions, sortBy: 'spot'})}>
+                Spot {filterOptions.sortBy === 'spot' && '▼'}
+              </th>
+              <th className="px-4 py-2 text-right cursor-pointer hover:bg-gray-600" onClick={() => setFilterOptions({...filterOptions, sortBy: 'change'})}>
+                Change % {filterOptions.sortBy === 'change' && '▼'}
+              </th>
+              <th className="px-4 py-2 text-right cursor-pointer hover:bg-gray-600" onClick={() => setFilterOptions({...filterOptions, sortBy: 'volume'})}>
+                Volume {filterOptions.sortBy === 'volume' && '▼'}
+              </th>
+              <th className="px-4 py-2 text-right cursor-pointer hover:bg-gray-600" onClick={() => setFilterOptions({...filterOptions, sortBy: 'iv'})}>
+                IV {filterOptions.sortBy === 'iv' && '▼'}
+              </th>
               <th className="px-4 py-2 text-right">IV %ile</th>
               <th className="px-4 py-2 text-center">Signal</th>
               <th className="px-4 py-2 text-center">Chain</th>
@@ -701,9 +714,12 @@ const LiveFODashboard = () => {
                     {stock.changePercent}%
                   </td>
                   <td className="px-4 py-2 text-right">{(stock.volume / 1000000).toFixed(2)}M</td>
-                  <td className="px-4 py-2 text-right">{stock.iv}%</td>
-                  <td className="px-4 py-2 text-right">{stock.ivRank}</td>
-                  <td className="px-4 py-2 text-right">{stock.ivPercentile}</td>
+                  <td className="px-4 py-2 text-right">
+                    {stock.iv > 0 ? `${stock.iv.toFixed(1)}%` : <span className="text-gray-500">N/A</span>}
+                  </td>
+                  <td className="px-4 py-2 text-right">
+                    {stock.ivPercentile > 0 ? `${stock.ivPercentile.toFixed(0)}%` : <span className="text-gray-500">N/A</span>}
+                  </td>
                   <td className="px-4 py-2 text-center">
                     {stock.gammaSignal && 
                       <AlertCircle className="inline w-5 h-5 text-yellow-400" />

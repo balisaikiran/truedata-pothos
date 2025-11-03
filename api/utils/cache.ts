@@ -97,7 +97,8 @@ export const CacheTTL = {
   LTP: 15000,      // 15 seconds for LTP data
   BARS: 300000,    // 5 minutes for bar data
   TICKS: 60000,    // 1 minute for tick data
-  QUOTA_ERROR: 300000 // 5 minutes for quota error
+  QUOTA_ERROR: 300000, // 5 minutes for quota error
+  SHORT: 30000     // 30 seconds for short-term cache
 };
 
 // Start cleanup interval
