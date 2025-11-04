@@ -90,6 +90,11 @@ app.use(cors({
 }));
 app.use(express.json());
 
+// Async error wrapper middleware - catches unhandled promise rejections in async routes
+const asyncHandler = (fn: Function) => (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  Promise.resolve(fn(req, res, next)).catch(next);
+};
+
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/data', dataRoutes);

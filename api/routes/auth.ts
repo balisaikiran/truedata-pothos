@@ -6,7 +6,7 @@ import type { AuthResponse, User } from '../../shared/types';
 const router = express.Router();
 
 // Login endpoint
-router.post('/login', async (req, res) => {
+router.post('/login', async (req, res, next) => {
   try {
     const { username, password } = req.body;
     
@@ -16,6 +16,24 @@ router.post('/login', async (req, res) => {
         message: 'Username and password are required' 
       });
     }
+
+    // Check if JWT_SECRET is set
+    if (!process.env.JWT_SECRET) {
+      console.error('JWT_SECRET is not set in environment variables');
+      return res.status(500).json({
+        success: false,
+        message: 'Server configuration error: JWT_SECRET missing'
+      });
+    }
+
+    // Check if TRUEDATA_HISTORY_URL is set
+    if (!process.env.TRUEDATA_HISTORY_URL) {
+      console.error('TRUEDATA_HISTORY_URL is not set in environment variables');
+      return res.status(500).json({
+        success: false,
+        message: 'Server configuration error: TRUEDATA_HISTORY_URL missing'
+      });
+    }
     
     // Authenticate with TrueData API
     const authResponse = await axios.post('https://auth.truedata.in/token', 
@@ -23,7 +41,8 @@ router.post('/login', async (req, res) => {
       {
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded'
-        }
+        },
+        timeout: 10000 // 10 second timeout
       }
     );
     
@@ -45,7 +64,8 @@ router.post('/login', async (req, res) => {
         },
         headers: {
           'Authorization': `Bearer ${trueDataToken}`
-        }
+        },
+        timeout: 10000 // 10 second timeout
       });
       
       console.log('TrueData API test successful');
@@ -78,10 +98,26 @@ router.post('/login', async (req, res) => {
 
   } catch (error: any) {
     console.error('Authentication error:', error.response?.data || error.message);
-    res.status(401).json({
-      success: false,
-      message: 'Authentication failed. Please check your credentials.'
-    });
+    console.error('Error stack:', error.stack);
+    
+    // If it's an axios error, provide more details
+    if (error.response) {
+      return res.status(error.response.status || 500).json({
+        success: false,
+        message: error.response.data?.message || 'Authentication failed. Please check your credentials.'
+      });
+    }
+    
+    // If it's a network error
+    if (error.request) {
+      return res.status(503).json({
+        success: false,
+        message: 'Unable to connect to authentication service. Please try again later.'
+      });
+    }
+    
+    // Pass to Express error handler
+    next(error);
   }
 });
 
