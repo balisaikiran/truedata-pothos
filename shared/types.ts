@@ -37,6 +37,9 @@ export interface OptionData {
   series: 'CE' | 'PE';
   expiry: string;
   ltp: number;
+  oi: number; // Open Interest
+  bid: number; // Bid price
+  ask: number; // Ask price
   delta: number;
   gamma: number;
   theta: number;

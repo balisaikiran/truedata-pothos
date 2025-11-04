@@ -136,6 +136,188 @@ const calculateIVFromOption = (
   return sigma * 100;
 };
 
+// Helper function to calculate time to expiry in years
+const calculateTimeToExpiry = (expiryDateStr: string): number => {
+  try {
+    // Parse expiry date (format: dd-MM-yyyy)
+    const [day, month, year] = expiryDateStr.split('-').map(Number);
+    const expiryDate = new Date(year, month - 1, day);
+    const now = new Date();
+    
+    // Calculate milliseconds difference
+    const diffMs = expiryDate.getTime() - now.getTime();
+    
+    // Convert to years (accounting for trading days: ~252 trading days per year)
+    const tradingDaysPerYear = 252;
+    const daysToExpiry = diffMs / (1000 * 60 * 60 * 24);
+    
+    // For options, use trading days (not calendar days)
+    // Approximate: assume ~5 trading days per week, ~252 per year
+    const tradingDays = daysToExpiry * (252 / 365);
+    
+    return Math.max(tradingDays / tradingDaysPerYear, 0.001); // Minimum 0.001 years (about 1 day)
+  } catch (error) {
+    console.error('Error calculating time to expiry:', error);
+    return 0.02; // Default to ~1 week if parsing fails
+  }
+};
+
+// Helper function to fetch option chain and calculate IV from ATM options
+const calculateIVFromOptionChain = async (
+  symbol: string,
+  underlyingPrice: number,
+  trueDataToken: string
+): Promise<number> => {
+  if (underlyingPrice <= 0) {
+    return 0;
+  }
+
+  try {
+    // Auto-detect expiry by trying known expiries
+    const today = new Date();
+    const currentYear = today.getFullYear();
+    const currentMonth = today.getMonth() + 1;
+    
+    // Known expiries for current/next month
+    const knownExpiries = [
+      '25-11-2025', // November 2025
+      '26-12-2025', // December 2025
+      '30-01-2026', // January 2026
+    ];
+    
+    let optionChainData: any = null;
+    let effectiveExpiry = '';
+    
+    // Try to fetch option chain with auto-detected expiry
+    for (const testExpiry of knownExpiries) {
+      try {
+        const response = await axios.get('https://analytics.truedata.in/api/getoptionchain', {
+          params: {
+            symbol,
+            expiry: testExpiry,
+            response: 'json'
+          },
+          headers: {
+            'Authorization': `Bearer ${trueDataToken}`
+          },
+          timeout: 5000 // Short timeout to avoid blocking
+        });
+        
+        if (response.data && response.data.Records && Array.isArray(response.data.Records) && response.data.Records.length > 0) {
+          optionChainData = response.data;
+          effectiveExpiry = testExpiry;
+          break;
+        }
+      } catch (err) {
+        continue; // Try next expiry
+      }
+    }
+    
+    if (!optionChainData || !optionChainData.Records || optionChainData.Records.length === 0) {
+      return 0; // No option chain data available
+    }
+    
+    // Parse option chain to find ATM options
+    const options: Array<{ strike: number; ceLtp: number; peLtp: number }> = [];
+    
+    // Parse Records array - try to find strike, CE LTP, and PE LTP
+    // Format varies, so we'll try common positions
+    const underlyingRangeMin = underlyingPrice * 0.3; // 30% below spot
+    const underlyingRangeMax = underlyingPrice * 2.5; // 250% above spot
+    
+    optionChainData.Records.forEach((record: any) => {
+      if (Array.isArray(record) && record.length >= 12) {
+        let strike = 0;
+        let ceLtp = 0;
+        let peLtp = 0;
+        
+        // Try to find strike (usually at index 3, but can vary)
+        for (let i = 0; i < Math.min(record.length, 10); i++) {
+          const val = parseFloat(record[i] || 0);
+          if (val >= underlyingRangeMin && val <= underlyingRangeMax && val < 50000 && val > 100) {
+            strike = val;
+            break;
+          }
+        }
+        
+        // Try to find CE LTP (usually after strike, small positive number 0-500)
+        for (let i = 0; i < record.length; i++) {
+          const val = parseFloat(record[i] || 0);
+          if (val > 0 && val < 500 && val !== strike) {
+            ceLtp = val;
+            break;
+          }
+        }
+        
+        // Try to find PE LTP (usually further down, small positive number 0-500)
+        for (let i = Math.floor(record.length / 2); i < record.length; i++) {
+          const val = parseFloat(record[i] || 0);
+          if (val > 0 && val < 500 && val !== strike && val !== ceLtp) {
+            peLtp = val;
+            break;
+          }
+        }
+        
+        if (strike > 0 && (ceLtp > 0 || peLtp > 0)) {
+          options.push({ strike, ceLtp, peLtp });
+        }
+      }
+    });
+    
+    if (options.length === 0) {
+      return 0; // No valid options found
+    }
+    
+    // Find ATM options (strikes closest to underlying price)
+    const atmOptions = options
+      .filter(opt => Math.abs(opt.strike - underlyingPrice) / underlyingPrice < 0.1) // Within 10% of spot
+      .sort((a, b) => Math.abs(a.strike - underlyingPrice) - Math.abs(b.strike - underlyingPrice))
+      .slice(0, 5); // Take top 5 closest strikes
+    
+    if (atmOptions.length === 0) {
+      // If no ATM options, use closest strikes
+      const closestOptions = options
+        .sort((a, b) => Math.abs(a.strike - underlyingPrice) - Math.abs(b.strike - underlyingPrice))
+        .slice(0, 3);
+      atmOptions.push(...closestOptions);
+    }
+    
+    // Calculate IV from ATM options
+    const ivValues: number[] = [];
+    const timeToExpiry = calculateTimeToExpiry(effectiveExpiry);
+    
+    for (const opt of atmOptions) {
+      // Calculate IV from CE if available
+      if (opt.ceLtp > 0) {
+        const ivCe = calculateIVFromOption(opt.ceLtp, underlyingPrice, opt.strike, timeToExpiry, 0.06, 'call');
+        if (ivCe > 0 && ivCe < 200) { // Sanity check: IV should be reasonable (0-200%)
+          ivValues.push(ivCe);
+        }
+      }
+      
+      // Calculate IV from PE if available
+      if (opt.peLtp > 0) {
+        const ivPe = calculateIVFromOption(opt.peLtp, underlyingPrice, opt.strike, timeToExpiry, 0.06, 'put');
+        if (ivPe > 0 && ivPe < 200) { // Sanity check
+          ivValues.push(ivPe);
+        }
+      }
+    }
+    
+    if (ivValues.length === 0) {
+      return 0; // No valid IV calculations
+    }
+    
+    // Return average IV (median would be better but average is simpler)
+    const avgIV = ivValues.reduce((sum, iv) => sum + iv, 0) / ivValues.length;
+    return Math.round(avgIV * 10) / 10; // Round to 1 decimal place
+    
+  } catch (error: any) {
+    console.error(`[IV Calculation ${symbol}] Error:`, error.message);
+    return 0; // Return 0 on error
+  }
+};
+
 // Calculate IV percentile based on historical data
 // NOTE: This function only works with REAL IV values from calculations
 // If IV is 0 or null, it means real IV data is not available
@@ -477,7 +659,12 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
 
     // Generate F&O stock data using ONLY REAL data from TrueData API
     // Calculate REAL IV from option chain data using Black-Scholes reverse calculation
-    const fnoStocks: FNOStockData[] = await Promise.all(validLTPData.map(async (ltpData) => {
+    // Limit IV calculation to avoid timeout - only calculate for first 8 symbols
+    const maxIVCalculations = 8;
+    const ivCalculationStartTime = Date.now();
+    const ivCalculationTimeout = 15000; // 15 seconds max for IV calculations
+    
+    const fnoStocks: FNOStockData[] = await Promise.all(validLTPData.map(async (ltpData, index) => {
       try {
         // Ensure symbol is always a string
         const symbol = String(ltpData.symbol || 'UNKNOWN').trim();
@@ -486,20 +673,36 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
         const changePercent = spot > 0 && (spot - change) !== 0 ? (change / (spot - change)) * 100 : 0;
         const volume = ltpData.volume || 0;
         
-        // Try to fetch REAL IV from TrueData API if available
-        // NOTE: TrueData may not provide IV directly in LTP data
-        // For now, set IV to 0 if not available - this indicates real data is not available
-        // DO NOT use fake/random values
+        // Calculate IV from option chain (only for first N symbols to avoid timeout)
         let iv = 0;
         let ivPercentile = 0;
         
-        // TODO: If TrueData provides IV data, fetch it here
-        // For now, IV is set to 0 to indicate real data is not available
-        // This is better than showing fake values
+        // Check if we should calculate IV (only for first N symbols and if we have time)
+        const shouldCalculateIV = index < maxIVCalculations && 
+                                  (Date.now() - ivCalculationStartTime) < ivCalculationTimeout &&
+                                  spot > 0;
         
-        // Only calculate percentile if we have real IV data
-        if (iv > 0) {
-          ivPercentile = calculateIVPercentile(symbol, iv);
+        if (shouldCalculateIV) {
+          try {
+            console.log(`[IV Calculation ${symbol}] Calculating IV from option chain...`);
+            iv = await calculateIVFromOptionChain(symbol, spot, trueDataToken);
+            
+            if (iv > 0) {
+              console.log(`[IV Calculation ${symbol}] ✅ Calculated IV: ${iv}%`);
+              // Calculate IV percentile
+              ivPercentile = calculateIVPercentile(symbol, iv);
+            } else {
+              console.log(`[IV Calculation ${symbol}] ⚠️  IV calculation returned 0 (no option chain data)`);
+            }
+          } catch (ivError: any) {
+            console.error(`[IV Calculation ${symbol}] Error calculating IV:`, ivError.message);
+            // Continue with IV = 0 if calculation fails
+            iv = 0;
+          }
+        } else if (index >= maxIVCalculations) {
+          console.log(`[IV Calculation ${symbol}] Skipping IV calculation (limit reached)`);
+        } else if (!spot || spot <= 0) {
+          console.log(`[IV Calculation ${symbol}] Skipping IV calculation (invalid spot price)`);
         }
         
         const ivRank = 0; // Removed from UI
@@ -1072,6 +1275,9 @@ router.get('/option-chain/:symbol', authenticateToken, async (req: any, res) => 
           series: (item.series || item.Series || 'CE').toUpperCase() as 'CE' | 'PE',
           expiry: item.expiry || item.Expiry || effectiveExpiry,
           ltp: parseFloat(item.ltp || item.LTP || 0),
+          oi: parseFloat(item.oi || item.OI || item.openInterest || 0),
+          bid: parseFloat(item.bid || item.Bid || item.bidPrice || 0),
+          ask: parseFloat(item.ask || item.Ask || item.askPrice || 0),
           delta: parseFloat(item.delta || item.Delta || 0),
           gamma: parseFloat(item.gamma || item.Gamma || 0),
           theta: parseFloat(item.theta || item.Theta || 0),
@@ -1267,17 +1473,101 @@ router.get('/option-chain/:symbol', authenticateToken, async (req: any, res) => 
               });
             }
             
-            // Extract Greeks if available (they might be in the record)
-            // CE Greeks might be after CE LTP, PE Greeks after PE LTP
-            const ceDelta = record[12] !== null && record[12] !== undefined ? parseFloat(record[12]) : 0;
-            const ceGamma = record[13] !== null && record[13] !== undefined ? parseFloat(record[13]) : 0;
-            const ceTheta = record[14] !== null && record[14] !== undefined ? parseFloat(record[14]) : 0;
-            const ceVega = record[15] !== null && record[15] !== undefined ? parseFloat(record[15]) : 0;
+            // Extract CE data: Format: [symbol, expiry, ?, strike, ceLtp, ceOI, ceBid, ceAsk, ceVol, ceOIChange, cePriceChange, peLtp, peOI, peBid, peAsk, peVol, peOIChange, pePriceChange, ?, ?, ?]
+            // CE fields: strike@3, ceLtp@4, ceOI@5, ceBid@6, ceAsk@7, ceVol@8, ceOIChange@9, cePriceChange@10
+            // PE fields: peLtp@11, peOI@12, peBid@13, peAsk@14, peVol@15, peOIChange@16, pePriceChange@17
+            const ceOI = record[5] !== null && record[5] !== undefined ? parseFloat(record[5]) : 0;
+            const ceBid = record[6] !== null && record[6] !== undefined ? parseFloat(record[6]) : 0;
+            const ceAsk = record[7] !== null && record[7] !== undefined ? parseFloat(record[7]) : 0;
             
-            const peDelta = record[16] !== null && record[16] !== undefined ? parseFloat(record[16]) : 0;
-            const peGamma = record[17] !== null && record[17] !== undefined ? parseFloat(record[17]) : 0;
-            const peTheta = record[18] !== null && record[18] !== undefined ? parseFloat(record[18]) : 0;
-            const peVega = record[19] !== null && record[19] !== undefined ? parseFloat(record[19]) : 0;
+            const peOI = record[12] !== null && record[12] !== undefined ? parseFloat(record[12]) : 0;
+            const peBid = record[13] !== null && record[13] !== undefined ? parseFloat(record[13]) : 0;
+            const peAsk = record[14] !== null && record[14] !== undefined ? parseFloat(record[14]) : 0;
+            
+            // Extract Greeks if available (they might be in the record or need to be calculated)
+            // Try to find Greeks - they might be at different positions
+            // CE Greeks might be after CE Ask, PE Greeks after PE Ask
+            let ceDelta = 0, ceGamma = 0, ceTheta = 0, ceVega = 0;
+            let peDelta = 0, peGamma = 0, peTheta = 0, peVega = 0;
+            
+            // Try common positions for Greeks (after LTP/OI/Bid/Ask)
+            // CE Greeks: after index 7 (ceAsk)
+            if (record.length > 12) {
+              ceDelta = record[8] !== null && record[8] !== undefined && !isNaN(parseFloat(record[8])) ? parseFloat(record[8]) : 0;
+              ceGamma = record[9] !== null && record[9] !== undefined && !isNaN(parseFloat(record[9])) ? parseFloat(record[9]) : 0;
+              ceTheta = record[10] !== null && record[10] !== undefined && !isNaN(parseFloat(record[10])) ? parseFloat(record[10]) : 0;
+            }
+            
+            // PE Greeks: after index 14 (peAsk)
+            if (record.length > 17) {
+              peDelta = record[15] !== null && record[15] !== undefined && !isNaN(parseFloat(record[15])) ? parseFloat(record[15]) : 0;
+              peGamma = record[16] !== null && record[16] !== undefined && !isNaN(parseFloat(record[16])) ? parseFloat(record[16]) : 0;
+              peTheta = record[17] !== null && record[17] !== undefined && !isNaN(parseFloat(record[17])) ? parseFloat(record[17]) : 0;
+            }
+            
+            // If Greeks are not in standard positions, try calculating them from option prices
+            // This is a fallback - we'll calculate Greeks if we have option prices
+            if ((ceDelta === 0 && ceGamma === 0 && ceTheta === 0) && ceLtp !== null && ceLtp > 0) {
+              // Calculate Greeks for CE option using Black-Scholes if we have LTP
+              // This is a basic calculation - real-time Greeks from API are preferred
+              try {
+                const timeToExpiry = calculateTimeToExpiry(effectiveExpiry);
+                if (timeToExpiry > 0) {
+                  // Calculate basic Greeks (simplified - full calculation would use Black-Scholes)
+                  const d1 = (Math.log(underlyingPrice / strike) + (0.06 + 0.5 * 0.2 * 0.2) * timeToExpiry) / (0.2 * Math.sqrt(timeToExpiry));
+                  const pdf = (x: number) => Math.exp(-0.5 * x * x) / Math.sqrt(2 * Math.PI);
+                  const cdf = (x: number) => {
+                    const a1 = 0.254829592;
+                    const a2 = -0.284496736;
+                    const a3 = 1.421413741;
+                    const a4 = -1.453152027;
+                    const a5 = 1.061405429;
+                    const p = 0.3275911;
+                    const sign = x < 0 ? -1 : 1;
+                    x = Math.abs(x) / Math.sqrt(2.0);
+                    const t = 1.0 / (1.0 + p * x);
+                    const y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * Math.exp(-x * x);
+                    return 0.5 * (1.0 + sign * y);
+                  };
+                  
+                  ceDelta = cdf(d1);
+                  ceGamma = pdf(d1) / (underlyingPrice * 0.2 * Math.sqrt(timeToExpiry));
+                  ceTheta = -(underlyingPrice * pdf(d1) * 0.2) / (2 * Math.sqrt(timeToExpiry)) - 0.06 * strike * Math.exp(-0.06 * timeToExpiry) * cdf(d1 - 0.2 * Math.sqrt(timeToExpiry));
+                }
+              } catch (err) {
+                // Keep Greeks as 0 if calculation fails
+              }
+            }
+            
+            if ((peDelta === 0 && peGamma === 0 && peTheta === 0) && peLtp !== null && peLtp > 0) {
+              // Calculate Greeks for PE option
+              try {
+                const timeToExpiry = calculateTimeToExpiry(effectiveExpiry);
+                if (timeToExpiry > 0) {
+                  const d1 = (Math.log(underlyingPrice / strike) + (0.06 + 0.5 * 0.2 * 0.2) * timeToExpiry) / (0.2 * Math.sqrt(timeToExpiry));
+                  const pdf = (x: number) => Math.exp(-0.5 * x * x) / Math.sqrt(2 * Math.PI);
+                  const cdf = (x: number) => {
+                    const a1 = 0.254829592;
+                    const a2 = -0.284496736;
+                    const a3 = 1.421413741;
+                    const a4 = -1.453152027;
+                    const a5 = 1.061405429;
+                    const p = 0.3275911;
+                    const sign = x < 0 ? -1 : 1;
+                    x = Math.abs(x) / Math.sqrt(2.0);
+                    const t = 1.0 / (1.0 + p * x);
+                    const y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * Math.exp(-x * x);
+                    return 0.5 * (1.0 + sign * y);
+                  };
+                  
+                  peDelta = cdf(d1) - 1;
+                  peGamma = pdf(d1) / (underlyingPrice * 0.2 * Math.sqrt(timeToExpiry));
+                  peTheta = -(underlyingPrice * pdf(d1) * 0.2) / (2 * Math.sqrt(timeToExpiry)) + 0.06 * strike * Math.exp(-0.06 * timeToExpiry) * (1 - cdf(d1 - 0.2 * Math.sqrt(timeToExpiry)));
+                }
+              } catch (err) {
+                // Keep Greeks as 0 if calculation fails
+              }
+            }
             
             // Extract expiry from record if available
             if (!effectiveExpiry && record[1]) {
@@ -1296,6 +1586,7 @@ router.get('/option-chain/:symbol', authenticateToken, async (req: any, res) => 
                 seenStrikes.add(strike);
                 
                 // Add CE option if LTP exists and is valid
+                // Format: OI, Bid, Ask, Delta, Gamma, Theta, Strike
                 if (validCeLtp) {
                   options.push({
                     symbol: symbol,
@@ -1304,15 +1595,19 @@ router.get('/option-chain/:symbol', authenticateToken, async (req: any, res) => 
                     series: 'CE',
                     expiry: effectiveExpiry,
                     ltp: ceLtp,
-                    delta: ceDelta,
-                    gamma: ceGamma,
-                    theta: ceTheta,
-                    vega: ceVega,
+                    oi: ceOI || 0,
+                    bid: ceBid || 0,
+                    ask: ceAsk || 0,
+                    delta: ceDelta || 0,
+                    gamma: ceGamma || 0,
+                    theta: ceTheta || 0,
+                    vega: ceVega || 0,
                     timestamp: new Date().toISOString()
                   });
                 }
                 
                 // Add PE option if LTP exists and is valid
+                // Format: Strike, Theta, Gamma, Delta, Bid, Ask, OI
                 if (validPeLtp) {
                   options.push({
                     symbol: symbol,
@@ -1321,10 +1616,13 @@ router.get('/option-chain/:symbol', authenticateToken, async (req: any, res) => 
                     series: 'PE',
                     expiry: effectiveExpiry,
                     ltp: peLtp,
-                    delta: peDelta,
-                    gamma: peGamma,
-                    theta: peTheta,
-                    vega: peVega,
+                    oi: peOI || 0,
+                    bid: peBid || 0,
+                    ask: peAsk || 0,
+                    delta: peDelta || 0,
+                    gamma: peGamma || 0,
+                    theta: peTheta || 0,
+                    vega: peVega || 0,
                     timestamp: new Date().toISOString()
                   });
                 }
@@ -1375,7 +1673,14 @@ router.get('/option-chain/:symbol', authenticateToken, async (req: any, res) => 
           if (Array.isArray(record) && record.length >= 20) {
             const strike = parseFloat(record[3] || 0);
             const ceLtp = record[4];
+            const ceOI = record[5] !== null && record[5] !== undefined ? parseFloat(record[5]) : 0;
+            const ceBid = record[6] !== null && record[6] !== undefined ? parseFloat(record[6]) : 0;
+            const ceAsk = record[7] !== null && record[7] !== undefined ? parseFloat(record[7]) : 0;
+            
             const peLtp = record[11];
+            const peOI = record[12] !== null && record[12] !== undefined ? parseFloat(record[12]) : 0;
+            const peBid = record[13] !== null && record[13] !== undefined ? parseFloat(record[13]) : 0;
+            const peAsk = record[14] !== null && record[14] !== undefined ? parseFloat(record[14]) : 0;
             
             if (strike > 0) {
               if (ceLtp !== null && ceLtp !== undefined && !isNaN(parseFloat(ceLtp))) {
@@ -1386,6 +1691,9 @@ router.get('/option-chain/:symbol', authenticateToken, async (req: any, res) => 
                   series: 'CE',
                   expiry: effectiveExpiry,
                   ltp: parseFloat(ceLtp),
+                  oi: ceOI || 0,
+                  bid: ceBid || 0,
+                  ask: ceAsk || 0,
                   delta: 0,
                   gamma: 0,
                   theta: 0,
@@ -1402,6 +1710,9 @@ router.get('/option-chain/:symbol', authenticateToken, async (req: any, res) => 
                   series: 'PE',
                   expiry: effectiveExpiry,
                   ltp: parseFloat(peLtp),
+                  oi: peOI || 0,
+                  bid: peBid || 0,
+                  ask: peAsk || 0,
                   delta: 0,
                   gamma: 0,
                   theta: 0,
