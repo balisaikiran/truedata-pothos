@@ -578,52 +578,80 @@ const LiveFODashboard = () => {
                 <table className="w-full text-sm">
                   <thead className="bg-gray-700">
                     <tr>
-                      <th className="px-3 py-2 text-left text-gray-300">Strike</th>
-                      <th className="px-3 py-2 text-left text-gray-300">% from Spot</th>
-                      <th className="px-3 py-2 text-center text-gray-300" colSpan={2}>CALL (CE)</th>
-                      <th className="px-3 py-2 text-center text-gray-300" colSpan={2}>PUT (PE)</th>
+                      <th className="px-2 py-2 text-center text-gray-300" colSpan={7}>CALL (CE)</th>
+                      <th className="px-2 py-2 text-center text-gray-300" colSpan={7}>PUT (PE)</th>
                     </tr>
                     <tr>
-                      <th></th>
-                      <th></th>
-                      <th className="px-2 py-1 text-center text-blue-400 text-xs">LTP</th>
+                      <th className="px-2 py-1 text-center text-blue-400 text-xs">OI</th>
+                      <th className="px-2 py-1 text-center text-blue-400 text-xs">Bid</th>
+                      <th className="px-2 py-1 text-center text-blue-400 text-xs">Ask</th>
                       <th className="px-2 py-1 text-center text-blue-400 text-xs">Delta</th>
-                      <th className="px-2 py-1 text-center text-red-400 text-xs">LTP</th>
+                      <th className="px-2 py-1 text-center text-blue-400 text-xs">Gamma</th>
+                      <th className="px-2 py-1 text-center text-blue-400 text-xs">Theta</th>
+                      <th className="px-2 py-1 text-center text-blue-400 text-xs font-semibold">Strike</th>
+                      <th className="px-2 py-1 text-center text-red-400 text-xs font-semibold">Strike</th>
+                      <th className="px-2 py-1 text-center text-red-400 text-xs">Theta</th>
+                      <th className="px-2 py-1 text-center text-red-400 text-xs">Gamma</th>
                       <th className="px-2 py-1 text-center text-red-400 text-xs">Delta</th>
+                      <th className="px-2 py-1 text-center text-red-400 text-xs">Bid</th>
+                      <th className="px-2 py-1 text-center text-red-400 text-xs">Ask</th>
+                      <th className="px-2 py-1 text-center text-red-400 text-xs">OI</th>
                     </tr>
                   </thead>
                   <tbody>
                     {getFilteredStrikes(standaloneChain.spot, standaloneChain.options).map((strikeData) => {
-                      const actualPercent = ((strikeData.strike - standaloneChain.spot) / standaloneChain.spot) * 100;
                       return (
                         <tr key={strikeData.strike} className="border-t border-gray-700 hover:bg-gray-750">
-                          <td className="px-3 py-2 font-semibold text-gray-300">
+                          {/* CALL Columns: OI, Bid, Ask, Delta, Gamma, Theta, Strike */}
+                          <td className="px-2 py-2 text-center text-blue-400 text-xs">
+                            {strikeData.callOption ? (strikeData.callOption.oi || 0).toLocaleString() : '-'}
+                          </td>
+                          <td className="px-2 py-2 text-center text-blue-400 text-xs">
+                            {strikeData.callOption ? `₹${(strikeData.callOption.bid || 0).toFixed(2)}` : '-'}
+                          </td>
+                          <td className="px-2 py-2 text-center text-blue-400 text-xs">
+                            {strikeData.callOption ? `₹${(strikeData.callOption.ask || 0).toFixed(2)}` : '-'}
+                          </td>
+                          <td className="px-2 py-2 text-center text-gray-400 text-xs">
+                            {strikeData.callOption ? parseFloat((strikeData.callOption.delta || 0).toString()).toFixed(3) : '-'}
+                          </td>
+                          <td className="px-2 py-2 text-center text-gray-400 text-xs">
+                            {strikeData.callOption ? parseFloat((strikeData.callOption.gamma || 0).toString()).toFixed(4) : '-'}
+                          </td>
+                          <td className="px-2 py-2 text-center text-gray-400 text-xs">
+                            {strikeData.callOption ? parseFloat((strikeData.callOption.theta || 0).toString()).toFixed(2) : '-'}
+                          </td>
+                          <td className="px-2 py-2 text-center font-semibold text-gray-300">
                             ₹{strikeData.strike}
                           </td>
-                          <td className={`px-3 py-2 ${
-                            Math.abs(actualPercent) < 0.5 ? 'text-yellow-400' : 
-                            actualPercent > 0 ? 'text-green-400' : 'text-red-400'
-                          }`}>
-                            {actualPercent >= 0 ? '+' : ''}{actualPercent.toFixed(1)}%
-                          </td>
-                          <td className="px-2 py-2 text-center text-blue-400">
-                            {strikeData.callOption ? `₹${strikeData.callOption.ltp.toFixed(2)}` : '-'}
+                          {/* PUT Columns: Strike, Theta, Gamma, Delta, Bid, Ask, OI */}
+                          <td className="px-2 py-2 text-center font-semibold text-gray-300">
+                            ₹{strikeData.strike}
                           </td>
                           <td className="px-2 py-2 text-center text-gray-400 text-xs">
-                            {strikeData.callOption ? parseFloat(strikeData.callOption.delta.toString()).toFixed(3) : '-'}
-                          </td>
-                          <td className="px-2 py-2 text-center text-red-400">
-                            {strikeData.putOption ? `₹${strikeData.putOption.ltp.toFixed(2)}` : '-'}
+                            {strikeData.putOption ? parseFloat((strikeData.putOption.theta || 0).toString()).toFixed(2) : '-'}
                           </td>
                           <td className="px-2 py-2 text-center text-gray-400 text-xs">
-                            {strikeData.putOption ? parseFloat(strikeData.putOption.delta.toString()).toFixed(3) : '-'}
+                            {strikeData.putOption ? parseFloat((strikeData.putOption.gamma || 0).toString()).toFixed(4) : '-'}
+                          </td>
+                          <td className="px-2 py-2 text-center text-gray-400 text-xs">
+                            {strikeData.putOption ? parseFloat((strikeData.putOption.delta || 0).toString()).toFixed(3) : '-'}
+                          </td>
+                          <td className="px-2 py-2 text-center text-red-400 text-xs">
+                            {strikeData.putOption ? `₹${(strikeData.putOption.bid || 0).toFixed(2)}` : '-'}
+                          </td>
+                          <td className="px-2 py-2 text-center text-red-400 text-xs">
+                            {strikeData.putOption ? `₹${(strikeData.putOption.ask || 0).toFixed(2)}` : '-'}
+                          </td>
+                          <td className="px-2 py-2 text-center text-red-400 text-xs">
+                            {strikeData.putOption ? (strikeData.putOption.oi || 0).toLocaleString() : '-'}
                           </td>
                         </tr>
                       );
                     })}
                     {getFilteredStrikes(standaloneChain.spot, standaloneChain.options).length === 0 && (
                       <tr>
-                        <td colSpan={6} className="px-3 py-4 text-center text-gray-500">
+                        <td colSpan={15} className="px-3 py-4 text-center text-gray-500">
                           No option chain data available for strikes at +5%, +10%, +15%, +20% bands.
                           <br />
                           <span className="text-xs">Total options available: {standaloneChain.options.length}</span>
@@ -824,45 +852,73 @@ const LiveFODashboard = () => {
                           <table className="w-full text-sm">
                             <thead className="bg-gray-800 sticky top-0">
                               <tr>
-                                <th className="px-3 py-2 text-left text-gray-400">Strike</th>
-                                <th className="px-3 py-2 text-left text-gray-400">% from Spot</th>
-                                <th className="px-3 py-2 text-center text-gray-400" colSpan={2}>CALL (CE)</th>
-                                <th className="px-3 py-2 text-center text-gray-400" colSpan={2}>PUT (PE)</th>
+                                <th className="px-2 py-2 text-center text-gray-400" colSpan={7}>CALL (CE)</th>
+                                <th className="px-2 py-2 text-center text-gray-400" colSpan={7}>PUT (PE)</th>
                               </tr>
                               <tr>
-                                <th></th>
-                                <th></th>
-                                <th className="px-2 py-1 text-center text-blue-400 text-xs">LTP</th>
+                                <th className="px-2 py-1 text-center text-blue-400 text-xs">OI</th>
+                                <th className="px-2 py-1 text-center text-blue-400 text-xs">Bid</th>
+                                <th className="px-2 py-1 text-center text-blue-400 text-xs">Ask</th>
                                 <th className="px-2 py-1 text-center text-blue-400 text-xs">Delta</th>
-                                <th className="px-2 py-1 text-center text-red-400 text-xs">LTP</th>
+                                <th className="px-2 py-1 text-center text-blue-400 text-xs">Gamma</th>
+                                <th className="px-2 py-1 text-center text-blue-400 text-xs">Theta</th>
+                                <th className="px-2 py-1 text-center text-blue-400 text-xs font-semibold">Strike</th>
+                                <th className="px-2 py-1 text-center text-red-400 text-xs font-semibold">Strike</th>
+                                <th className="px-2 py-1 text-center text-red-400 text-xs">Theta</th>
+                                <th className="px-2 py-1 text-center text-red-400 text-xs">Gamma</th>
                                 <th className="px-2 py-1 text-center text-red-400 text-xs">Delta</th>
+                                <th className="px-2 py-1 text-center text-red-400 text-xs">Bid</th>
+                                <th className="px-2 py-1 text-center text-red-400 text-xs">Ask</th>
+                                <th className="px-2 py-1 text-center text-red-400 text-xs">OI</th>
                               </tr>
                             </thead>
                             <tbody>
                               {allStrikes.map((strikeData) => {
-                                const actualPercent = ((strikeData.strike - underlyingPrice) / underlyingPrice) * 100;
                                 return (
                                   <tr key={strikeData.strike} className="border-t border-gray-700 hover:bg-gray-800">
-                                    <td className="px-3 py-2 font-semibold text-gray-300">
+                                    {/* CALL Columns: OI, Bid, Ask, Delta, Gamma, Theta, Strike */}
+                                    <td className="px-2 py-2 text-center text-blue-400 text-xs">
+                                      {strikeData.callOption ? (strikeData.callOption.oi || 0).toLocaleString() : '-'}
+                                    </td>
+                                    <td className="px-2 py-2 text-center text-blue-400 text-xs">
+                                      {strikeData.callOption ? `₹${(strikeData.callOption.bid || 0).toFixed(2)}` : '-'}
+                                    </td>
+                                    <td className="px-2 py-2 text-center text-blue-400 text-xs">
+                                      {strikeData.callOption ? `₹${(strikeData.callOption.ask || 0).toFixed(2)}` : '-'}
+                                    </td>
+                                    <td className="px-2 py-2 text-center text-gray-400 text-xs">
+                                      {strikeData.callOption ? parseFloat((strikeData.callOption.delta || 0).toString()).toFixed(3) : '-'}
+                                    </td>
+                                    <td className="px-2 py-2 text-center text-gray-400 text-xs">
+                                      {strikeData.callOption ? parseFloat((strikeData.callOption.gamma || 0).toString()).toFixed(4) : '-'}
+                                    </td>
+                                    <td className="px-2 py-2 text-center text-gray-400 text-xs">
+                                      {strikeData.callOption ? parseFloat((strikeData.callOption.theta || 0).toString()).toFixed(2) : '-'}
+                                    </td>
+                                    <td className="px-2 py-2 text-center font-semibold text-gray-300">
                                       ₹{strikeData.strike}
                                     </td>
-                                    <td className={`px-3 py-2 ${
-                                      Math.abs(actualPercent) < 0.5 ? 'text-yellow-400' : 
-                                      actualPercent > 0 ? 'text-green-400' : 'text-red-400'
-                                    }`}>
-                                      {actualPercent >= 0 ? '+' : ''}{actualPercent.toFixed(1)}%
-                                    </td>
-                                    <td className="px-2 py-2 text-center text-blue-400">
-                                      {strikeData.callOption ? `₹${strikeData.callOption.ltp.toFixed(2)}` : '-'}
+                                    {/* PUT Columns: Strike, Theta, Gamma, Delta, Bid, Ask, OI */}
+                                    <td className="px-2 py-2 text-center font-semibold text-gray-300">
+                                      ₹{strikeData.strike}
                                     </td>
                                     <td className="px-2 py-2 text-center text-gray-400 text-xs">
-                                      {strikeData.callOption ? parseFloat(strikeData.callOption.delta.toString()).toFixed(3) : '-'}
-                                    </td>
-                                    <td className="px-2 py-2 text-center text-red-400">
-                                      {strikeData.putOption ? `₹${strikeData.putOption.ltp.toFixed(2)}` : '-'}
+                                      {strikeData.putOption ? parseFloat((strikeData.putOption.theta || 0).toString()).toFixed(2) : '-'}
                                     </td>
                                     <td className="px-2 py-2 text-center text-gray-400 text-xs">
-                                      {strikeData.putOption ? parseFloat(strikeData.putOption.delta.toString()).toFixed(3) : '-'}
+                                      {strikeData.putOption ? parseFloat((strikeData.putOption.gamma || 0).toString()).toFixed(4) : '-'}
+                                    </td>
+                                    <td className="px-2 py-2 text-center text-gray-400 text-xs">
+                                      {strikeData.putOption ? parseFloat((strikeData.putOption.delta || 0).toString()).toFixed(3) : '-'}
+                                    </td>
+                                    <td className="px-2 py-2 text-center text-red-400 text-xs">
+                                      {strikeData.putOption ? `₹${(strikeData.putOption.bid || 0).toFixed(2)}` : '-'}
+                                    </td>
+                                    <td className="px-2 py-2 text-center text-red-400 text-xs">
+                                      {strikeData.putOption ? `₹${(strikeData.putOption.ask || 0).toFixed(2)}` : '-'}
+                                    </td>
+                                    <td className="px-2 py-2 text-center text-red-400 text-xs">
+                                      {strikeData.putOption ? (strikeData.putOption.oi || 0).toLocaleString() : '-'}
                                     </td>
                                   </tr>
                                 );
