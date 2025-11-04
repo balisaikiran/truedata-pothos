@@ -228,8 +228,8 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
       'HCLTECH', 'AXISBANK', 'MARUTI', 'SUNPHARMA', 'TITAN', 'ULTRACEMCO'
     ];
     
-    // Fetch 15 symbols - use parallel requests with concurrency limit for better performance
-    const symbolsToFetch = prioritySymbols.slice(0, 15);
+    // Fetch 10 symbols initially to avoid rate limiting (can increase if rate limits allow)
+    const symbolsToFetch = prioritySymbols.slice(0, 10);
     console.log(`Fetching LTP for ${symbolsToFetch.length} symbols...`);
     console.log(`Using token: ${trueDataToken ? `${trueDataToken.substring(0, 20)}...` : 'MISSING'}`);
     console.log(`API URL: ${process.env.TRUEDATA_HISTORY_URL}`);
@@ -260,8 +260,8 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
       const earlyReturnTime = 8000; // Return early if we get at least 5 symbols within 8 seconds
       let earlyReturnTriggered = false;
       
-      // Process in batches of 3 to avoid rate limits
-      const batchSize = 3;
+      // Process in batches of 2 to reduce rate limiting (reduced from 3)
+      const batchSize = 2;
       for (let batchStart = 0; batchStart < symbolsToFetch.length; batchStart += batchSize) {
         // Check timeout
         const elapsed = Date.now() - startTime;
@@ -281,79 +281,112 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
         const batchNum = Math.floor(batchStart / batchSize) + 1;
         console.log(`Processing batch ${batchNum}: ${batch.join(', ')}`);
         
-        // Process batch in parallel
-        const batchPromises = batch.map(async (symbol) => {
+        // Process batch sequentially to avoid rate limiting
+        for (const symbol of batch) {
           try {
-            const response = await axios.get(`${process.env.TRUEDATA_HISTORY_URL}/getLTPBulk`, {
-              params: {
-                symbols: symbol,
-                response: 'json'
-              },
-              headers: {
-                'Authorization': `Bearer ${trueDataToken}`
-              },
-              timeout: 8000 // Increased timeout slightly
-            });
+            // Retry logic for 429 errors
+            let retries = 0;
+            const maxRetries = 3;
+            let lastError: any = null;
+            
+            while (retries < maxRetries) {
+              try {
+                const response = await axios.get(`${process.env.TRUEDATA_HISTORY_URL}/getLTPBulk`, {
+                  params: {
+                    symbols: symbol,
+                    response: 'json'
+                  },
+                  headers: {
+                    'Authorization': `Bearer ${trueDataToken}`
+                  },
+                  timeout: 8000
+                });
 
-            console.log(`✓ ${symbol} response:`, response.data?.status || 'unknown status');
-
-            // EXACT same parsing as working endpoint
-            if (response.data && response.data.status === 'Success' && 
-                response.data.Records && response.data.Records.length > 0) {
-              const record = response.data.Records[0];
-              
-              // TrueData getLTPBulk returns: [symbolId, timestamp, price, volume, change]
-              if (Array.isArray(record) && record.length >= 5) {
-                const ltp = parseFloat(record[2] || 0); // price is at index 2
-                const volume = parseInt(record[3] || 0); // volume is at index 3
-                const change = parseFloat(record[4] || 0); // change is at index 4
-                
-                if (ltp > 0) {
-                  console.log(`✓ ${symbol} - LTP: ${ltp}, Change: ${change}`);
-                  return {
-                    symbol: symbol,
-                    ltp: ltp,
-                    volume: volume,
-                    change: change,
-                    timestamp: record[1] || new Date().toISOString()
-                  };
+                // EXACT same parsing as working endpoint
+                if (response.data && response.data.status === 'Success' && 
+                    response.data.Records && response.data.Records.length > 0) {
+                  const record = response.data.Records[0];
+                  
+                  // TrueData getLTPBulk returns: [symbolId, timestamp, price, volume, change]
+                  if (Array.isArray(record) && record.length >= 5) {
+                    const ltp = parseFloat(record[2] || 0); // price is at index 2
+                    const volume = parseInt(record[3] || 0); // volume is at index 3
+                    const change = parseFloat(record[4] || 0); // change is at index 4
+                    
+                    if (ltp > 0) {
+                      console.log(`✓ ${symbol} - LTP: ${ltp}, Change: ${change}`);
+                      validLTPResults.push({
+                        symbol: symbol,
+                        ltp: ltp,
+                        volume: volume,
+                        change: change,
+                        timestamp: record[1] || new Date().toISOString()
+                      });
+                      break; // Success, exit retry loop
+                    } else {
+                      console.warn(`⚠️  ${symbol} - Invalid LTP (${ltp})`);
+                      break; // Invalid data, exit retry loop
+                    }
+                  } else {
+                    console.warn(`⚠️  ${symbol} - Invalid record format:`, record);
+                    break; // Invalid format, exit retry loop
+                  }
                 } else {
-                  console.warn(`⚠️  ${symbol} - Invalid LTP (${ltp})`);
+                  console.warn(`⚠️  ${symbol} - Invalid response:`, {
+                    status: response.data?.status,
+                    records: response.data?.Records?.length || 0
+                  });
+                  break; // Invalid response, exit retry loop
                 }
-              } else {
-                console.warn(`⚠️  ${symbol} - Invalid record format:`, record);
+              } catch (error: any) {
+                lastError = error;
+                const status = error.response?.status;
+                
+                // Handle 429 (Rate Limit) with exponential backoff
+                if (status === 429) {
+                  retries++;
+                  if (retries < maxRetries) {
+                    const waitTime = Math.min(1000 * Math.pow(2, retries - 1), 5000); // Max 5 seconds
+                    console.warn(`⚠️  ${symbol} - Rate limited (429), retrying in ${waitTime}ms (attempt ${retries}/${maxRetries})`);
+                    await new Promise(resolve => setTimeout(resolve, waitTime));
+                    continue; // Retry
+                  } else {
+                    console.error(`✗ ${symbol} - Rate limited (429), max retries reached`);
+                    break; // Give up after max retries
+                  }
+                } else {
+                  // Other errors, don't retry
+                  console.error(`✗ ${symbol} - Failed:`, {
+                    status: status,
+                    statusText: error.response?.statusText,
+                    message: error.message,
+                    code: error.code
+                  });
+                  break; // Exit retry loop for non-429 errors
+                }
               }
-            } else {
-              console.warn(`⚠️  ${symbol} - Invalid response:`, {
-                status: response.data?.status,
-                records: response.data?.Records?.length || 0
-              });
             }
-            return null;
-          } catch (error: any) {
-            // Log all errors with details
-            console.error(`✗ ${symbol} - Failed:`, {
-              status: error.response?.status,
-              statusText: error.response?.statusText,
-              message: error.message,
-              code: error.code,
-              responseData: error.response?.data
-            });
-            return null;
+            
+            // If we exhausted retries, log final error
+            if (retries >= maxRetries && lastError?.response?.status === 429) {
+              console.error(`✗ ${symbol} - Failed after ${maxRetries} retries`);
+            }
+          } catch (finalError: any) {
+            console.error(`✗ ${symbol} - Unexpected error:`, finalError.message);
           }
-        });
-        
-        // Wait for batch to complete
-        const batchResults = await Promise.all(batchPromises);
-        const validBatchResults = batchResults.filter((result): result is NonNullable<typeof result> => result !== null);
-        validLTPResults.push(...validBatchResults);
+          
+          // Delay between individual requests to avoid rate limiting
+          if (symbol !== batch[batch.length - 1]) {
+            await new Promise(resolve => setTimeout(resolve, 800)); // Increased delay between requests
+          }
+        }
         
         // Log progress
-        console.log(`✓ Batch ${batchNum}: Got ${validBatchResults.length}/${batch.length} symbols (Total: ${validLTPResults.length})`);
+        console.log(`✓ Batch ${batchNum}: Got ${validLTPResults.length} total symbols so far`);
         
-        // Small delay between batches (except last batch)
+        // Longer delay between batches to avoid rate limiting
         if (batchStart + batchSize < symbolsToFetch.length && !earlyReturnTriggered) {
-          await new Promise(resolve => setTimeout(resolve, 400)); // Slightly increased delay
+          await new Promise(resolve => setTimeout(resolve, 1200)); // Increased delay between batches
         }
       }
 
@@ -592,7 +625,7 @@ router.get('/market-summary', authenticateToken, async (req: any, res) => {
       'HCLTECH', 'AXISBANK', 'MARUTI', 'SUNPHARMA', 'TITAN', 'ULTRACEMCO'
     ];
     
-    const symbolsToFetch = prioritySymbols.slice(0, 10); // Reduced from 20 to 10
+    const symbolsToFetch = prioritySymbols.slice(0, 8); // Reduced to 8 for faster summary
     console.log(`[Market Summary] Fetching LTP for ${symbolsToFetch.length} symbols...`);
 
     try {
@@ -600,58 +633,99 @@ router.get('/market-summary', authenticateToken, async (req: any, res) => {
       const startTime = Date.now();
       const maxTime = 10000; // 10 seconds max for summary
       
-      const ltpPromises = symbolsToFetch.map(async (symbol, index) => {
+      const validLTPResults: Array<{
+        symbol: string;
+        ltp: number;
+        volume: number;
+        change: number;
+        timestamp: string;
+      }> = [];
+      
+      // Process sequentially to avoid rate limiting
+      for (let index = 0; index < symbolsToFetch.length; index++) {
+        const symbol = symbolsToFetch[index];
+        
         // Check timeout
         if (Date.now() - startTime > maxTime) {
-          return null;
-        }
-        
-        // Reduced delay - only every 3 requests instead of every 5
-        if (index > 0 && index % 3 === 0) {
-          await new Promise(resolve => setTimeout(resolve, 200));
+          console.log(`[Market Summary] Timeout approaching, returning ${validLTPResults.length} symbols`);
+          break;
         }
         
         try {
-          // EXACT format from working endpoint with shorter timeout
-          const response = await axios.get(`${process.env.TRUEDATA_HISTORY_URL}/getLTPBulk`, {
-            params: {
-              symbols: symbol,
-              response: 'json'
-            },
-            headers: {
-              'Authorization': `Bearer ${trueDataToken}`
-            },
-            timeout: 5000 // Reduced from 8000 to 5000
-          });
+          // Retry logic for 429 errors
+          let retries = 0;
+          const maxRetries = 2; // Fewer retries for summary
+          let success = false;
+          
+          while (retries < maxRetries && !success) {
+            try {
+              const response = await axios.get(`${process.env.TRUEDATA_HISTORY_URL}/getLTPBulk`, {
+                params: {
+                  symbols: symbol,
+                  response: 'json'
+                },
+                headers: {
+                  'Authorization': `Bearer ${trueDataToken}`
+                },
+                timeout: 5000
+              });
 
-          if (response.data && response.data.status === 'Success' && 
-              response.data.Records && response.data.Records.length > 0) {
-            const record = response.data.Records[0];
-            
-            if (Array.isArray(record) && record.length >= 5) {
-              const ltp = parseFloat(record[2] || 0);
-              const volume = parseInt(record[3] || 0);
-              const change = parseFloat(record[4] || 0);
+              if (response.data && response.data.status === 'Success' && 
+                  response.data.Records && response.data.Records.length > 0) {
+                const record = response.data.Records[0];
+                
+                if (Array.isArray(record) && record.length >= 5) {
+                  const ltp = parseFloat(record[2] || 0);
+                  const volume = parseInt(record[3] || 0);
+                  const change = parseFloat(record[4] || 0);
+                  
+                  if (ltp > 0) {
+                    validLTPResults.push({
+                      symbol: symbol,
+                      ltp: ltp,
+                      volume: volume,
+                      change: change,
+                      timestamp: record[1] || new Date().toISOString()
+                    });
+                    success = true;
+                    break;
+                  }
+                }
+              }
               
-              if (ltp > 0) {
-                return {
-                  symbol: symbol,
-                  ltp: ltp,
-                  volume: volume,
-                  change: change,
-                  timestamp: record[1] || new Date().toISOString()
-                };
+              // If we get here, data was invalid but not a rate limit error
+              break;
+            } catch (error: any) {
+              const status = error.response?.status;
+              
+              // Handle 429 (Rate Limit) with backoff
+              if (status === 429) {
+                retries++;
+                if (retries < maxRetries) {
+                  const waitTime = 1000 * retries; // 1s, 2s
+                  console.warn(`[Market Summary] ${symbol} - Rate limited (429), retrying in ${waitTime}ms`);
+                  await new Promise(resolve => setTimeout(resolve, waitTime));
+                } else {
+                  console.warn(`[Market Summary] ${symbol} - Rate limited (429), skipping`);
+                  break;
+                }
+              } else {
+                // Other errors, don't retry
+                break;
               }
             }
           }
-          return null;
         } catch (error: any) {
-          return null;
+          // Skip this symbol
         }
-      });
+        
+        // Delay between requests to avoid rate limiting
+        if (index < symbolsToFetch.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 1000)); // 1 second delay
+        }
+      }
 
-      const ltpResults = await Promise.all(ltpPromises);
-      validLTPData = ltpResults.filter((item): item is any => item !== null);
+      validLTPData = validLTPResults;
       console.log(`[Market Summary] Successfully fetched ${validLTPData.length} symbols`);
     } catch (bulkError: any) {
       console.error('[Market Summary] Error in bulk LTP fetch:', bulkError.message || bulkError);
