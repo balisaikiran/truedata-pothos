@@ -113,7 +113,11 @@ console.log('  - /api/options');
 console.log('  - /api/fno (including /option-chain/:symbol)');
 
 app.get('/api/health', (req, res) => {
-  res.json({ 
+  console.log('Health endpoint called');
+  console.log('Request path:', req.path);
+  console.log('Request url:', req.url);
+  
+  const response = { 
     status: 'OK', 
     timestamp: new Date().toISOString(),
     version: '1.0.0',
@@ -123,7 +127,11 @@ app.get('/api/health', (req, res) => {
       hasTrueDataApi: !!process.env.TRUEDATA_API_URL,
       hasTrueDataHistory: !!process.env.TRUEDATA_HISTORY_URL
     }
-  });
+  };
+  
+  console.log('Sending health response:', response);
+  res.json(response);
+  console.log('Health response sent');
 });
 
 // Global error handler middleware (must be last)
