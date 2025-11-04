@@ -508,24 +508,105 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
                     response.data.Records && response.data.Records.length > 0) {
                   const record = response.data.Records[0];
                   
+                  // Log full record structure for debugging (first symbol only)
+                  if (batchStart === 0) {
+                    console.log(`[${symbol}] Full API response record:`, JSON.stringify(record));
+                    console.log(`[${symbol}] Record length: ${Array.isArray(record) ? record.length : 'not array'}`);
+                    if (Array.isArray(record)) {
+                      record.forEach((val: any, idx: number) => {
+                        console.log(`  [${idx}]: ${JSON.stringify(val)} (${typeof val})`);
+                      });
+                    }
+                  }
+                  
                   // TrueData getLTPBulk returns: [symbolId, timestamp, price, volume, change]
-                  if (Array.isArray(record) && record.length >= 5) {
-                    const ltp = parseFloat(record[2] || 0); // price is at index 2
-                    const volume = parseInt(record[3] || 0); // volume is at index 3
-                    const change = parseFloat(record[4] || 0); // change is at index 4
+                  // But the actual format might vary, so we'll try to parse intelligently
+                  if (Array.isArray(record) && record.length >= 3) {
+                    // Try to find price (should be a reasonable positive number)
+                    let ltp = 0;
+                    let volume = 0;
+                    let change = 0;
+                    let timestamp = '';
+                    
+                    // Find price - should be a reasonable positive number (not symbolId, not timestamp)
+                    for (let i = 0; i < record.length; i++) {
+                      const val = record[i];
+                      if (val !== null && val !== undefined) {
+                        const numVal = parseFloat(val);
+                        if (!isNaN(numVal) && numVal > 0 && numVal < 1000000) {
+                          // Likely price - check if it's reasonable (not too small, not too large)
+                          if (numVal > 1 && numVal < 100000 && ltp === 0) {
+                            ltp = numVal;
+                            // Volume might be next, or a few positions away
+                            // Change might be next after volume
+                            // Try to find volume (usually a large integer)
+                            for (let j = i + 1; j < Math.min(record.length, i + 5); j++) {
+                              const volVal = record[j];
+                              if (volVal !== null && volVal !== undefined) {
+                                const volNum = parseInt(volVal);
+                                if (!isNaN(volNum) && volNum >= 0 && volNum < 1000000000) {
+                                  // Volume is usually a large integer
+                                  if (volNum > 0 && volume === 0) {
+                                    volume = volNum;
+                                  }
+                                }
+                                // Change might be a small decimal (could be positive or negative)
+                                const changeNum = parseFloat(volVal);
+                                if (!isNaN(changeNum) && Math.abs(changeNum) < 10000 && change === 0 && volNum === 0) {
+                                  change = changeNum;
+                                }
+                              }
+                            }
+                            break;
+                          }
+                        }
+                        // Timestamp might be a string or number
+                        if (typeof val === 'string' && val.length > 10 && timestamp === '') {
+                          timestamp = val;
+                        }
+                      }
+                    }
+                    
+                    // Fallback to documented positions if auto-detection failed
+                    if (ltp === 0 && record.length >= 5) {
+                      // Try standard positions: [symbolId, timestamp, price, volume, change]
+                      ltp = parseFloat(record[2] || 0);
+                      volume = parseInt(record[3] || 0);
+                      change = parseFloat(record[4] || 0);
+                      timestamp = record[1] || new Date().toISOString();
+                      
+                      // If still no volume/change, try scanning all fields
+                      if (volume === 0 || change === 0) {
+                        // Try to find volume (large integer, usually after price)
+                        for (let k = 2; k < record.length; k++) {
+                          const testVal = record[k];
+                          if (testVal !== null && testVal !== undefined) {
+                            const testNum = parseInt(testVal);
+                            if (!isNaN(testNum) && testNum > 1000 && testNum < 1000000000 && volume === 0) {
+                              volume = testNum;
+                            }
+                            // Try to find change (small decimal, can be negative)
+                            const testChange = parseFloat(testVal);
+                            if (!isNaN(testChange) && Math.abs(testChange) < 1000 && change === 0 && testNum === 0) {
+                              change = testChange;
+                            }
+                          }
+                        }
+                      }
+                    }
                     
                     if (ltp > 0) {
-                      console.log(`✓ ${symbol} - LTP: ${ltp}, Change: ${change}`);
+                      console.log(`✓ ${symbol} - LTP: ${ltp}, Volume: ${volume}, Change: ${change}${change !== 0 ? ` (${((change / (ltp - change)) * 100).toFixed(2)}%)` : ''}`);
                       validLTPResults.push({
                         symbol: symbol,
                         ltp: ltp,
                         volume: volume,
                         change: change,
-                        timestamp: record[1] || new Date().toISOString()
+                        timestamp: timestamp || record[1] || new Date().toISOString()
                       });
                       break; // Success, exit retry loop
                     } else {
-                      console.warn(`⚠️  ${symbol} - Invalid LTP (${ltp})`);
+                      console.warn(`⚠️  ${symbol} - Invalid LTP (${ltp}), record:`, record);
                       break; // Invalid data, exit retry loop
                     }
                   } else {
@@ -670,8 +751,30 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
         const symbol = String(ltpData.symbol || 'UNKNOWN').trim();
         const spot = ltpData.ltp || 0;
         const change = ltpData.change || 0;
-        const changePercent = spot > 0 && (spot - change) !== 0 ? (change / (spot - change)) * 100 : 0;
         const volume = ltpData.volume || 0;
+        
+        // Calculate changePercent correctly
+        // If change is absolute change: changePercent = (change / previousPrice) * 100
+        // Previous price = spot - change
+        // So: changePercent = (change / (spot - change)) * 100
+        let changePercent = 0;
+        if (spot > 0 && change !== 0) {
+          const previousPrice = spot - change;
+          if (previousPrice > 0 && Math.abs(previousPrice) > 0.01) {
+            changePercent = (change / previousPrice) * 100;
+          }
+        }
+        
+        // Log for debugging if values are 0 (only for first few symbols to avoid spam)
+        if (index < 3 && (change === 0 || volume === 0)) {
+          console.log(`[${symbol}] Parsed values:`, {
+            spot,
+            change,
+            volume,
+            changePercent: changePercent.toFixed(2),
+            rawLtpData: ltpData
+          });
+        }
         
         // Calculate IV from option chain (only for first N symbols to avoid timeout)
         let iv = 0;
