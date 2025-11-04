@@ -1,7 +1,7 @@
 import express from 'express';
 import axios from 'axios';
 import { authenticateToken } from './auth';
-import type { LTPResponse, BarData } from '../../shared/types';
+import type { LTPResponse, BarData, TickData } from '../../shared/types';
 import { handleTrueDataError, sendErrorResponse } from '../utils/errorHandler';
 import { cache, CacheKeys, CacheTTL } from '../utils/cache';
 import { ltpRateLimiter, barsRateLimiter, ticksRateLimiter } from '../utils/rateLimiter';
@@ -91,7 +91,7 @@ router.get('/bars/:symbol', authenticateToken, async (req: any, res) => {
 
     // Check cache first
     const cacheKey = CacheKeys.BARS(symbol, interval as string, from as string, to as string);
-    const cachedData = cache.get(cacheKey);
+    const cachedData = cache.get<{ bars: BarData[]; symbol: string; interval: string; total: number }>(cacheKey);
     if (cachedData) {
       return res.json({ ...cachedData, fromCache: true });
     }
@@ -141,13 +141,13 @@ router.get('/bars/:symbol', authenticateToken, async (req: any, res) => {
         low: parseFloat(item.low || 0),
         close: parseFloat(item.close || 0),
         volume: parseInt(item.volume || 0),
-        interval
+        interval: interval as string
       }));
 
       const result = {
         bars,
         symbol,
-        interval,
+        interval: interval as string,
         total: bars.length
       };
 
@@ -159,7 +159,7 @@ router.get('/bars/:symbol', authenticateToken, async (req: any, res) => {
       const result = {
         bars: [],
         symbol,
-        interval,
+        interval: interval as string,
         total: 0
       };
       
@@ -191,7 +191,7 @@ router.get('/ticks/:symbol', authenticateToken, async (req: any, res) => {
 
     // Check cache first
     const cacheKey = CacheKeys.TICKS(symbol, from as string, to as string);
-    const cachedData = cache.get(cacheKey);
+    const cachedData = cache.get<{ ticks: TickData[]; symbol: string; total: number }>(cacheKey);
     if (cachedData) {
       return res.json({ ...cachedData, fromCache: true });
     }
@@ -233,7 +233,7 @@ router.get('/ticks/:symbol', authenticateToken, async (req: any, res) => {
     });
 
     if (response.data && Array.isArray(response.data)) {
-      const ticks = response.data.map((item: any) => ({
+      const ticks: TickData[] = response.data.map((item: any) => ({
         symbol: item.symbol || symbol,
         price: parseFloat(item.price || item.close || 0),
         volume: parseInt(item.volume || 0),
@@ -275,7 +275,7 @@ router.get('/ticks/:symbol', authenticateToken, async (req: any, res) => {
 router.get('/lastbars/:symbol', authenticateToken, async (req, res) => {
   try {
     const { symbol } = req.params;
-    const { count = 100, interval = '1m' } = req.query;
+    const { count = 100, interval = '1m' } = req.query as any;
     const trueDataToken = (req as any).user.trueDataToken;
 
     // Calculate date range based on count
@@ -285,7 +285,7 @@ router.get('/lastbars/:symbol', authenticateToken, async (req, res) => {
 
     // Check cache first
     const cacheKey = CacheKeys.BARS(symbol, interval as string, from.toISOString(), now.toISOString());
-    const cachedData = cache.get(cacheKey);
+    const cachedData = cache.get<{ bars: BarData[]; symbol: string; interval: string; total: number }>(cacheKey);
     if (cachedData) {
       return res.json({ ...cachedData, fromCache: true });
     }
@@ -334,13 +334,13 @@ router.get('/lastbars/:symbol', authenticateToken, async (req, res) => {
         low: parseFloat(item.low || 0),
         close: parseFloat(item.close || 0),
         volume: parseInt(item.volume || 0),
-        interval
+        interval: interval as string
       }));
 
       const result = {
         bars,
         symbol,
-        interval,
+        interval: interval as string,
         total: bars.length
       };
 
@@ -352,7 +352,7 @@ router.get('/lastbars/:symbol', authenticateToken, async (req, res) => {
       const result = {
         bars: [],
         symbol,
-        interval,
+        interval: interval as string,
         total: 0
       };
       

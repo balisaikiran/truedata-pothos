@@ -741,7 +741,7 @@ const LiveFODashboard = () => {
                 {/* Expanded Option Chain */}
                 {expandedChains[stock.symbol] && (
                   <tr>
-                    <td colSpan="9" className="px-4 py-4 bg-gray-900">
+                    <td colSpan={9} className="px-4 py-4 bg-gray-900">
                       <div className="mb-3 font-semibold text-gray-300 flex items-center justify-between">
                         <span>Option Chain - {stock.symbol} (Spot: ₹{stock.spot.toFixed(2)})</span>
                         <button

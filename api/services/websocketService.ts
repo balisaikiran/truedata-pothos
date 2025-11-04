@@ -101,6 +101,7 @@ class WebSocketService {
         const ltpData = await this.fetchLTPData(symbol, token);
         if (ltpData) {
           const update: LiveDataUpdate = {
+            type: 'ltp',
             symbol,
             data: ltpData,
             timestamp: new Date().toISOString()

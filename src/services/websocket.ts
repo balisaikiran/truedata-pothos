@@ -1,8 +1,16 @@
-import { io, Socket } from 'socket.io-client';
+// @ts-ignore – socket.io-client is optional; will be dynamically required only when WS_URL is provided
+let io: any, Socket: any;
+try {
+  const socketIo = await import('socket.io-client');
+  io = socketIo.io;
+  Socket = socketIo.Socket;
+} catch {
+  // Module not available; leave io and Socket undefined
+}
 import { LiveDataUpdate, WebSocketMessage } from '../../shared/types';
 
 class WebSocketService {
-  private socket: Socket | null = null;
+  private socket: typeof Socket | null = null;
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
   private reconnectDelay = 1000;
@@ -10,7 +18,16 @@ class WebSocketService {
 
   connect(token?: string): Promise<void> {
     return new Promise((resolve, reject) => {
-      const wsUrl = import.meta.env.VITE_WS_URL || 'http://localhost:3002';
+      const wsUrl = (import.meta as any).env?.VITE_WS_URL;
+
+      // If no websocket URL is provided, skip connecting (use API polling)
+      if (!wsUrl) {
+        console.warn('WebSocket URL not set (VITE_WS_URL). Skipping websocket connection.');
+        this.socket = null;
+        this.reconnectAttempts = 0;
+        resolve();
+        return;
+      }
       
       this.socket = io(wsUrl, {
         auth: {

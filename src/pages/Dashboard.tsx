@@ -283,8 +283,8 @@ const Dashboard: React.FC<DashboardProps> = ({ selectedSymbol = 'RELIANCE' }) =>
           <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Market Details</h3>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div>
-              <p className="text-sm text-gray-600 dark:text-gray-400">Open</p>
-              <p className="text-gray-900 dark:text-white font-medium">₹{ltpData.open?.toFixed(2) || 'N/A'}</p>
+              <p className="text-sm text-gray-600 dark:text-gray-400">LTP</p>
+              <p className="text-gray-900 dark:text-white font-medium">₹{ltpData.ltp.toFixed(2)}</p>
             </div>
             <div>
               <p className="text-sm text-gray-600 dark:text-gray-400">High</p>
@@ -295,8 +295,8 @@ const Dashboard: React.FC<DashboardProps> = ({ selectedSymbol = 'RELIANCE' }) =>
               <p className="text-gray-900 dark:text-white font-medium">₹{ltpData.low?.toFixed(2) || 'N/A'}</p>
             </div>
             <div>
-              <p className="text-sm text-gray-600 dark:text-gray-400">Close</p>
-              <p className="text-gray-900 dark:text-white font-medium">₹{ltpData.close?.toFixed(2) || 'N/A'}</p>
+              <p className="text-sm text-gray-600 dark:text-gray-400">Change</p>
+              <p className="text-gray-900 dark:text-white font-medium">₹{ltpData.change.toFixed(2)}</p>
             </div>
           </div>
         </div>

@@ -130,9 +130,9 @@ const SymbolSearch: React.FC<SymbolSearchProps> = ({ onSymbolSelect }) => {
       ['Symbol', 'Name', 'Segment', 'Instrument', 'Lot Size', 'Tick Size'].join(','),
       ...filteredSymbols.map(symbol => [
         symbol.symbol,
-        `"${symbol.name}"`,
+        `"${symbol.companyName}"`,
         symbol.segment,
-        symbol.instrument,
+        symbol.segment,
         symbol.lotSize || '',
         symbol.tickSize || ''
       ].join(','))
@@ -290,7 +290,7 @@ const SymbolSearch: React.FC<SymbolSearchProps> = ({ onSymbolSelect }) => {
                       </div>
                     </td>
                     <td className="px-4 py-3">
-                      <span className="text-gray-600 dark:text-gray-300 text-sm">{symbol.name}</span>
+                      <span className="text-gray-600 dark:text-gray-300 text-sm">{symbol.companyName}</span>
                     </td>
                     <td className="px-4 py-3">
                       <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200">
@@ -299,7 +299,7 @@ const SymbolSearch: React.FC<SymbolSearchProps> = ({ onSymbolSelect }) => {
                     </td>
                     <td className="px-4 py-3">
                       <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200">
-                        {symbol.instrument}
+                        {symbol.segment}
                       </span>
                     </td>
                     <td className="px-4 py-3">
@@ -421,7 +421,7 @@ const SymbolSearch: React.FC<SymbolSearchProps> = ({ onSymbolSelect }) => {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">{selectedSymbol.symbol}</h4>
-                <p className="text-gray-600 dark:text-gray-300 mb-4">{selectedSymbol.name}</p>
+                <p className="text-gray-600 dark:text-gray-300 mb-4">{selectedSymbol.companyName}</p>
                 
                 <div className="space-y-2">
                   <div className="flex justify-between">
@@ -430,7 +430,7 @@ const SymbolSearch: React.FC<SymbolSearchProps> = ({ onSymbolSelect }) => {
                   </div>
                   <div className="flex justify-between">
                     <span className="text-gray-600 dark:text-gray-400">Instrument:</span>
-                    <span className="text-gray-900 dark:text-white">{selectedSymbol.instrument}</span>
+                    <span className="text-gray-900 dark:text-white">{selectedSymbol.segment}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-gray-600 dark:text-gray-400">Lot Size:</span>
