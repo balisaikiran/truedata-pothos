@@ -231,6 +231,18 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
     // Fetch 15 symbols - use parallel requests with concurrency limit for better performance
     const symbolsToFetch = prioritySymbols.slice(0, 15);
     console.log(`Fetching LTP for ${symbolsToFetch.length} symbols...`);
+    console.log(`Using token: ${trueDataToken ? `${trueDataToken.substring(0, 20)}...` : 'MISSING'}`);
+    console.log(`API URL: ${process.env.TRUEDATA_HISTORY_URL}`);
+    
+    if (!trueDataToken) {
+      console.error('ERROR: No TrueData token available!');
+      throw new Error('Authentication token missing');
+    }
+    
+    if (!process.env.TRUEDATA_HISTORY_URL) {
+      console.error('ERROR: TRUEDATA_HISTORY_URL not configured!');
+      throw new Error('API URL not configured');
+    }
     
     try {
       // Fetch with parallel requests (batched to avoid rate limits)
@@ -245,17 +257,29 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
       // Add overall timeout - if we exceed 20 seconds, return what we have
       const startTime = Date.now();
       const maxTime = 20000; // 20 seconds max
+      const earlyReturnTime = 8000; // Return early if we get at least 5 symbols within 8 seconds
+      let earlyReturnTriggered = false;
       
       // Process in batches of 3 to avoid rate limits
       const batchSize = 3;
       for (let batchStart = 0; batchStart < symbolsToFetch.length; batchStart += batchSize) {
         // Check timeout
-        if (Date.now() - startTime > maxTime) {
-          console.log(`Timeout approaching, returning ${validLTPResults.length} symbols`);
+        const elapsed = Date.now() - startTime;
+        if (elapsed > maxTime) {
+          console.log(`⏱️  Timeout approaching (${elapsed}ms), returning ${validLTPResults.length} symbols`);
+          break;
+        }
+        
+        // Early return if we got enough data quickly
+        if (!earlyReturnTriggered && elapsed > earlyReturnTime && validLTPResults.length >= 5) {
+          console.log(`✅ Early return: Got ${validLTPResults.length} symbols in ${elapsed}ms`);
+          earlyReturnTriggered = true;
           break;
         }
         
         const batch = symbolsToFetch.slice(batchStart, batchStart + batchSize);
+        const batchNum = Math.floor(batchStart / batchSize) + 1;
+        console.log(`Processing batch ${batchNum}: ${batch.join(', ')}`);
         
         // Process batch in parallel
         const batchPromises = batch.map(async (symbol) => {
@@ -268,8 +292,10 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
               headers: {
                 'Authorization': `Bearer ${trueDataToken}`
               },
-              timeout: 6000
+              timeout: 8000 // Increased timeout slightly
             });
+
+            console.log(`✓ ${symbol} response:`, response.data?.status || 'unknown status');
 
             // EXACT same parsing as working endpoint
             if (response.data && response.data.status === 'Success' && 
@@ -283,6 +309,7 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
                 const change = parseFloat(record[4] || 0); // change is at index 4
                 
                 if (ltp > 0) {
+                  console.log(`✓ ${symbol} - LTP: ${ltp}, Change: ${change}`);
                   return {
                     symbol: symbol,
                     ltp: ltp,
@@ -290,15 +317,28 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
                     change: change,
                     timestamp: record[1] || new Date().toISOString()
                   };
+                } else {
+                  console.warn(`⚠️  ${symbol} - Invalid LTP (${ltp})`);
                 }
+              } else {
+                console.warn(`⚠️  ${symbol} - Invalid record format:`, record);
               }
+            } else {
+              console.warn(`⚠️  ${symbol} - Invalid response:`, {
+                status: response.data?.status,
+                records: response.data?.Records?.length || 0
+              });
             }
             return null;
           } catch (error: any) {
-            // Log errors for first batch only
-            if (batchStart === 0) {
-              console.error(`✗ ${symbol} - Failed:`, error.response?.status || 'No status', error.message);
-            }
+            // Log all errors with details
+            console.error(`✗ ${symbol} - Failed:`, {
+              status: error.response?.status,
+              statusText: error.response?.statusText,
+              message: error.message,
+              code: error.code,
+              responseData: error.response?.data
+            });
             return null;
           }
         });
@@ -309,13 +349,11 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
         validLTPResults.push(...validBatchResults);
         
         // Log progress
-        if (batchStart === 0) {
-          console.log(`✓ Batch 1: Got ${validBatchResults.length}/${batch.length} symbols`);
-        }
+        console.log(`✓ Batch ${batchNum}: Got ${validBatchResults.length}/${batch.length} symbols (Total: ${validLTPResults.length})`);
         
         // Small delay between batches (except last batch)
-        if (batchStart + batchSize < symbolsToFetch.length) {
-          await new Promise(resolve => setTimeout(resolve, 300));
+        if (batchStart + batchSize < symbolsToFetch.length && !earlyReturnTriggered) {
+          await new Promise(resolve => setTimeout(resolve, 400)); // Slightly increased delay
         }
       }
 
@@ -337,6 +375,19 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
       } else {
         console.error(`ERROR: No data fetched for any symbol!`);
         console.error(`This indicates a problem with the TrueData API or authentication`);
+        console.error(`Checking cache for fallback data...`);
+        
+        // Try to get cached data as fallback
+        const cachedData = cache.get<FNOStockData[]>(cacheKey);
+        if (cachedData && cachedData.length > 0) {
+          console.log(`⚠️  Using cached data as fallback (${cachedData.length} stocks)`);
+          return res.json({
+            stocks: cachedData,
+            fromCache: true,
+            timestamp: new Date().toISOString(),
+            warning: 'Using cached data - API fetch failed'
+          });
+        }
       }
       console.log(`=== End Summary ===\n`);
     } catch (bulkError: any) {
@@ -344,8 +395,22 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
       console.error('Error details:', {
         response: bulkError.response?.data,
         status: bulkError.response?.status,
-        message: bulkError.message
+        message: bulkError.message,
+        stack: bulkError.stack
       });
+      
+      // Try to return cached data if available
+      const cachedData = cache.get<FNOStockData[]>(cacheKey);
+      if (cachedData && cachedData.length > 0) {
+        console.log(`✅ Error occurred, returning cached data (${cachedData.length} stocks)`);
+        return res.json({
+          stocks: cachedData,
+          fromCache: true,
+          timestamp: new Date().toISOString(),
+          error: 'Using cached data due to fetch error'
+        });
+      }
+      
       // Return empty array if bulk fetch fails completely - don't throw, just return empty
       validLTPData = [];
     }
@@ -427,6 +492,11 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
       }
       // If no cache and no data, return empty array but don't throw error
       console.warn('⚠️  No data available and no cache - returning empty array');
+      console.warn('⚠️  This likely means:');
+      console.warn('    1. Market is closed');
+      console.warn('    2. TrueData API is down');
+      console.warn('    3. Authentication token is invalid');
+      console.warn('    4. Rate limiting is blocking requests');
       return res.json({
         stocks: [],
         fromCache: false,
