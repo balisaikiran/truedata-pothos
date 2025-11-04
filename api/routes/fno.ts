@@ -227,12 +227,12 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
       'HCLTECH', 'AXISBANK', 'MARUTI', 'SUNPHARMA', 'TITAN', 'ULTRACEMCO'
     ];
     
-    // Fetch only 15 symbols to start - can expand later
-    const symbolsToFetch = prioritySymbols.slice(0, 15);
+    // Fetch only 10 symbols to reduce timeout risk
+    const symbolsToFetch = prioritySymbols.slice(0, 10);
     console.log(`Fetching LTP for ${symbolsToFetch.length} symbols...`);
     
     try {
-      // Fetch sequentially with delays to avoid rate limits
+      // Fetch with shorter delays and timeout protection
       const validLTPResults: Array<{
         symbol: string;
         ltp: number;
@@ -241,16 +241,32 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
         timestamp: string;
       }> = [];
       
+      // Add overall timeout - if we exceed 15 seconds, return what we have
+      const startTime = Date.now();
+      const maxTime = 15000; // 15 seconds max
+      
       for (let i = 0; i < symbolsToFetch.length; i++) {
+        // Check if we're running out of time
+        if (Date.now() - startTime > maxTime) {
+          console.log(`Timeout approaching, returning ${validLTPResults.length} symbols`);
+          break;
+        }
+        
+        // If we have at least 5 successful results, we can return early
+        if (validLTPResults.length >= 5 && Date.now() - startTime > 8000) {
+          console.log(`Early return: Got ${validLTPResults.length} symbols, returning early`);
+          break;
+        }
+        
         const symbol = symbolsToFetch[i];
         
-        // Add delay between requests (except first one)
+        // Reduced delay - 150ms instead of 500ms
         if (i > 0) {
-          await new Promise(resolve => setTimeout(resolve, 500));
+          await new Promise(resolve => setTimeout(resolve, 150));
         }
         
         try {
-          // Direct TrueData call - EXACT same as working /api/data/ltp endpoint
+          // Direct TrueData call with shorter timeout
           const response = await axios.get(`${process.env.TRUEDATA_HISTORY_URL}/getLTPBulk`, {
             params: {
               symbols: symbol,
@@ -259,7 +275,7 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
             headers: {
               'Authorization': `Bearer ${trueDataToken}`
             },
-            timeout: 6000
+            timeout: 5000 // Reduced from 6000 to 5000
           });
 
           // EXACT same parsing as working endpoint
@@ -461,17 +477,27 @@ router.get('/market-summary', authenticateToken, async (req: any, res) => {
       'HCLTECH', 'AXISBANK', 'MARUTI', 'SUNPHARMA', 'TITAN', 'ULTRACEMCO'
     ];
     
-    const symbolsToFetch = prioritySymbols.slice(0, 20);
+    const symbolsToFetch = prioritySymbols.slice(0, 10); // Reduced from 20 to 10
     console.log(`[Market Summary] Fetching LTP for ${symbolsToFetch.length} symbols...`);
 
     try {
+      // Add timeout protection
+      const startTime = Date.now();
+      const maxTime = 10000; // 10 seconds max for summary
+      
       const ltpPromises = symbolsToFetch.map(async (symbol, index) => {
-        if (index > 0 && index % 5 === 0) {
-          await new Promise(resolve => setTimeout(resolve, 500));
+        // Check timeout
+        if (Date.now() - startTime > maxTime) {
+          return null;
+        }
+        
+        // Reduced delay - only every 3 requests instead of every 5
+        if (index > 0 && index % 3 === 0) {
+          await new Promise(resolve => setTimeout(resolve, 200));
         }
         
         try {
-          // EXACT format from working endpoint
+          // EXACT format from working endpoint with shorter timeout
           const response = await axios.get(`${process.env.TRUEDATA_HISTORY_URL}/getLTPBulk`, {
             params: {
               symbols: symbol,
@@ -480,7 +506,7 @@ router.get('/market-summary', authenticateToken, async (req: any, res) => {
             headers: {
               'Authorization': `Bearer ${trueDataToken}`
             },
-            timeout: 8000
+            timeout: 5000 // Reduced from 8000 to 5000
           });
 
           if (response.data && response.data.status === 'Success' && 

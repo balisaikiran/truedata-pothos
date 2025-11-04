@@ -259,7 +259,9 @@ class ApiService {
   async getFNOMarketData(): Promise<{ stocks: FNOStockData[]; fromCache: boolean; timestamp: string }> {
     console.log('Making request to /api/fno/market-data');
     const response: AxiosResponse<{ stocks: FNOStockData[]; fromCache: boolean; timestamp: string }> = 
-      await this.api.get('/api/fno/market-data');
+      await this.api.get('/api/fno/market-data', {
+        timeout: 30000 // 30 second timeout for FNO market data
+      });
     console.log('F&O market data response:', response.data);
     return response.data;
   }
@@ -267,7 +269,9 @@ class ApiService {
   async getFNOMarketSummary(): Promise<{ summary: FNOMarketSummary; fromCache: boolean; timestamp: string }> {
     console.log('Making request to /api/fno/market-summary');
     const response: AxiosResponse<{ summary: FNOMarketSummary; fromCache: boolean; timestamp: string }> = 
-      await this.api.get('/api/fno/market-summary');
+      await this.api.get('/api/fno/market-summary', {
+        timeout: 30000 // 30 second timeout for FNO market summary
+      });
     console.log('F&O market summary response:', response.data);
     return response.data;
   }
@@ -280,6 +284,7 @@ class ApiService {
       `/api/fno/option-chain/${encodeURIComponent(symbol)}`, // URL encode the symbol
       {
         params: expiry ? { expiry } : {},
+        timeout: 30000 // 30 second timeout for option chain
       }
     );
     
