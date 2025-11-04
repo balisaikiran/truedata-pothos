@@ -255,10 +255,10 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
         timestamp: string;
       }> = [];
       
-      // Add overall timeout - if we exceed 20 seconds, return what we have
+      // Add overall timeout - if we exceed 25 seconds, return what we have (must be < 30s frontend timeout)
       const startTime = Date.now();
-      const maxTime = 20000; // 20 seconds max to allow more symbols
-      const earlyReturnTime = 5000; // Return early if we get at least 2 symbols within 5 seconds
+      const maxTime = 25000; // 25 seconds max (must be less than 30s frontend timeout)
+      const earlyReturnTime = 8000; // Return early if we get at least 5 symbols within 8 seconds
       let earlyReturnTriggered = false;
       
       // Process sequentially (one at a time) to avoid rate limiting
@@ -271,16 +271,29 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
           break;
         }
         
-        // Early return if we got enough data quickly (reduced threshold)
-        if (!earlyReturnTriggered && elapsed > earlyReturnTime && validLTPResults.length >= 2) {
+        // Aggressive early returns to avoid timeout
+        // Return after 5 symbols within 8 seconds
+        if (!earlyReturnTriggered && elapsed > earlyReturnTime && validLTPResults.length >= 5) {
           console.log(`✅ Early return: Got ${validLTPResults.length} symbols in ${elapsed}ms`);
           earlyReturnTriggered = true;
           break;
         }
         
-        // If we got at least 3 symbols, return early to avoid timeout
-        if (validLTPResults.length >= 3 && elapsed > 8000) {
+        // If we got at least 8 symbols, return early to avoid timeout (after 10 seconds)
+        if (validLTPResults.length >= 8 && elapsed > 10000) {
           console.log(`✅ Early return: Got ${validLTPResults.length} symbols, returning early to avoid timeout`);
+          break;
+        }
+        
+        // If we got at least 3 symbols after 15 seconds, return to avoid timeout
+        if (validLTPResults.length >= 3 && elapsed > 15000) {
+          console.log(`✅ Early return: Got ${validLTPResults.length} symbols after ${elapsed}ms, returning to avoid timeout`);
+          break;
+        }
+        
+        // If timeout is approaching, return what we have
+        if (elapsed > maxTime - 2000) { // 2 seconds before timeout
+          console.log(`⏱️  Approaching timeout (${elapsed}ms), returning ${validLTPResults.length} symbols`);
           break;
         }
         
@@ -350,21 +363,22 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
                 
                 // Handle 429 (Rate Limit) - skip retries immediately to avoid timeout
                 if (status === 429) {
-                  // If we already have data, skip immediately
-                  if (validLTPResults.length >= 2) {
-                    console.warn(`⚠️  ${symbol} - Rate limited (429), skipping (already have ${validLTPResults.length} symbols)`);
-                    break; // Skip immediately if we have enough data
+                  const elapsed = Date.now() - startTime;
+                  // If we already have data OR timeout is approaching, skip immediately
+                  if (validLTPResults.length >= 5 || elapsed > maxTime - 5000) {
+                    console.warn(`⚠️  ${symbol} - Rate limited (429), skipping (already have ${validLTPResults.length} symbols or timeout approaching)`);
+                    break; // Skip immediately if we have enough data or timeout is near
                   }
                   
-                  // Only retry once if we don't have enough data yet
-                  if (retries === 0) {
+                  // Only retry once if we don't have enough data yet AND we have time
+                  if (retries === 0 && elapsed < maxTime - 3000) {
                     retries++;
-                    console.warn(`⚠️  ${symbol} - Rate limited (429), retrying once in 2000ms`);
-                    await new Promise(resolve => setTimeout(resolve, 2000));
+                    console.warn(`⚠️  ${symbol} - Rate limited (429), retrying once in 1500ms`);
+                    await new Promise(resolve => setTimeout(resolve, 1500)); // Reduced delay
                     continue; // Retry once
                   } else {
-                    console.error(`✗ ${symbol} - Rate limited (429), skipping after retry`);
-                    break; // Give up after one retry
+                    console.error(`✗ ${symbol} - Rate limited (429), skipping after retry or timeout approaching`);
+                    break; // Give up after one retry or if timeout is near
                   }
                 } else {
                   // Other errors, don't retry
@@ -387,9 +401,16 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
           console.error(`✗ ${symbol} - Unexpected error:`, finalError.message);
         }
         
-          // Delay between requests to avoid rate limiting (increased significantly)
+          // Delay between requests to avoid rate limiting
+          // Check timeout before delaying
           if (batchStart + batchSize < symbolsToFetch.length && !earlyReturnTriggered) {
-            await new Promise(resolve => setTimeout(resolve, 3000)); // 3 second delay between requests
+            const elapsed = Date.now() - startTime;
+            if (elapsed < maxTime - 2500) { // Only delay if we have time
+              await new Promise(resolve => setTimeout(resolve, 2000)); // 2 second delay (reduced from 3s)
+            } else {
+              console.log(`⏱️  Skipping delay to avoid timeout`);
+              break; // Skip remaining symbols to avoid timeout
+            }
           }
         
         // Log progress
