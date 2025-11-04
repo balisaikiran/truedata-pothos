@@ -12,7 +12,7 @@ interface SymbolSearchProps {
 const SymbolSearch: React.FC<SymbolSearchProps> = ({ onSymbolSelect }) => {
   const { theme } = useTheme();
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedSegment, setSelectedSegment] = useState('NSE');
+  const [selectedSegment, setSelectedSegment] = useState('EQ');
   const [symbols, setSymbols] = useState<Symbol[]>([]);
   const [filteredSymbols, setFilteredSymbols] = useState<Symbol[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -47,7 +47,7 @@ const SymbolSearch: React.FC<SymbolSearchProps> = ({ onSymbolSelect }) => {
       setError(null);
       
       const response = await axios.get<SymbolSearchResponse>('/api/symbols/all', {
-        params: { segment: selectedSegment }
+        params: { segment: selectedSegment.toLowerCase() }
       });
       
       setSymbols(response.data.symbols);
@@ -76,7 +76,7 @@ const SymbolSearch: React.FC<SymbolSearchProps> = ({ onSymbolSelect }) => {
       const response = await axios.get<SymbolSearchResponse>('/api/symbols/search', {
         params: {
           query: query.trim(),
-          segment: selectedSegment,
+          segment: selectedSegment.toLowerCase(),
           limit: 100
         }
       });

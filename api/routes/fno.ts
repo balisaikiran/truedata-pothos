@@ -230,7 +230,7 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
     
     // Fetch 5 symbols initially to avoid rate limiting (reduced from 8)
     // This ensures we can get data quickly even with rate limits
-    const symbolsToFetch = prioritySymbols.slice(0, 5);
+    const symbolsToFetch = prioritySymbols.slice(0, 12);
     console.log(`Fetching LTP for ${symbolsToFetch.length} symbols...`);
     console.log(`Using token: ${trueDataToken ? `${trueDataToken.substring(0, 20)}...` : 'MISSING'}`);
     console.log(`API URL: ${process.env.TRUEDATA_HISTORY_URL}`);
@@ -255,9 +255,9 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
         timestamp: string;
       }> = [];
       
-      // Add overall timeout - if we exceed 12 seconds, return what we have (reduced from 15)
+      // Add overall timeout - if we exceed 20 seconds, return what we have
       const startTime = Date.now();
-      const maxTime = 12000; // 12 seconds max (reduced to avoid frontend timeout)
+      const maxTime = 20000; // 20 seconds max to allow more symbols
       const earlyReturnTime = 5000; // Return early if we get at least 2 symbols within 5 seconds
       let earlyReturnTriggered = false;
       
