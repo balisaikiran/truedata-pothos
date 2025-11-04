@@ -110,7 +110,45 @@ app.get('/api/health', (req, res) => {
     status: 'OK', 
     timestamp: new Date().toISOString(),
     version: '1.0.0',
-    mode: isServerless ? 'serverless' : 'server'
+    mode: isServerless ? 'serverless' : 'server',
+    env: {
+      hasJwtSecret: !!process.env.JWT_SECRET,
+      hasTrueDataApi: !!process.env.TRUEDATA_API_URL,
+      hasTrueDataHistory: !!process.env.TRUEDATA_HISTORY_URL
+    }
+  });
+});
+
+// Global error handler middleware (must be last)
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  console.error('Express error handler:', err);
+  
+  if (res.headersSent) {
+    return next(err);
+  }
+
+  const statusCode = err.statusCode || err.status || 500;
+  res.status(statusCode).json({
+    success: false,
+    error: {
+      code: statusCode.toString(),
+      message: err.message || 'A server error has occurred',
+      ...(process.env.NODE_ENV === 'development' && { 
+        stack: err.stack,
+        details: err
+      })
+    }
+  });
+});
+
+// 404 handler (must be after all routes)
+app.use((req: express.Request, res: express.Response) => {
+  res.status(404).json({
+    success: false,
+    error: {
+      code: '404',
+      message: `Route ${req.method} ${req.path} not found`
+    }
   });
 });
 
