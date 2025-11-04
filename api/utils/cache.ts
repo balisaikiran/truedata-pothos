@@ -1,4 +1,4 @@
-import { LTPResponse } from '../../shared/types';
+import { LTPResponse } from '../../shared/types.js';
 
 interface CacheEntry<T> {
   data: T;

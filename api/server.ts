@@ -1,7 +1,7 @@
 /**
  * local server entry file, for local development
  */
-import { app, initializeWebSocket } from './app';
+import { app, initializeWebSocket } from './app.js';
 import { createServer } from 'http';
 
 /**
@@ -14,7 +14,7 @@ const PORT = process.env.PORT || 3001;
   await initializeWebSocket();
   
   // Get the server instance (initialized by initializeWebSocket)
-  const { server } = await import('./app');
+  const { server } = await import('./app.js');
   
   if (!server) {
     console.error('❌ Server not initialized. Creating HTTP server...');

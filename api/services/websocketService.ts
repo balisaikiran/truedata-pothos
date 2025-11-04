@@ -1,6 +1,6 @@
 import { Server } from 'socket.io';
 import axios from 'axios';
-import type { LiveDataUpdate, LTPResponse } from '../../shared/types';
+import type { LiveDataUpdate, LTPResponse } from '../../shared/types.js';
 
 class WebSocketService {
   private io: Server;

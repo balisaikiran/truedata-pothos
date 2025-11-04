@@ -4,36 +4,16 @@
  */
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import serverless from 'serverless-http';
+import app from './app.js';
 
-// Import app with error handling
-let app: any;
-let handler: any;
+// Wrap Express app for serverless
+const handler = serverless(app, {
+  binary: ['image/*', 'application/json'],
+});
 
-try {
-  app = require('./app.js').default;
-  // Wrap Express app for serverless
-  handler = serverless(app, {
-    binary: ['image/*', 'application/json'],
-  });
-  console.log('✅ Express app loaded successfully');
-} catch (error: any) {
-  console.error('❌ Failed to load Express app:', error);
-  console.error('❌ Error stack:', error?.stack);
-}
+console.log('✅ Express app loaded successfully');
 
 export default async function (req: VercelRequest, res: VercelResponse) {
-  // Check if app loaded successfully
-  if (!app || !handler) {
-    console.error('❌ Express app not loaded, cannot handle request');
-    return res.status(500).json({
-      success: false,
-      error: {
-        code: '500',
-        message: 'Server initialization failed'
-      }
-    });
-  }
-
   // Debug logging
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
   console.log('Environment check:', {

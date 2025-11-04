@@ -1,10 +1,10 @@
 import express from 'express';
 import axios from 'axios';
-import { authenticateToken } from './auth';
-import type { LTPResponse } from '../../shared/types';
-import { handleTrueDataError, sendErrorResponse } from '../utils/errorHandler';
-import { cache, CacheKeys, CacheTTL } from '../utils/cache';
-import { ltpRateLimiter } from '../utils/rateLimiter';
+import { authenticateToken } from './auth.js';
+import type { LTPResponse } from '../../shared/types.js';
+import { handleTrueDataError, sendErrorResponse } from '../utils/errorHandler.js';
+import { cache, CacheKeys, CacheTTL } from '../utils/cache.js';
+import { ltpRateLimiter } from '../utils/rateLimiter.js';
 
 const router = express.Router();
 

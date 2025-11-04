@@ -1,7 +1,7 @@
 import express from 'express';
 import axios from 'axios';
-import { authenticateToken } from './auth';
-import type { OptionData, OptionsChainResponse } from '../../shared/types';
+import { authenticateToken } from './auth.js';
+import type { OptionData, OptionsChainResponse } from '../../shared/types.js';
 
 const router = express.Router();
 

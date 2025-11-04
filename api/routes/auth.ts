@@ -1,7 +1,7 @@
 import express from 'express';
 import axios from 'axios';
 import jwt from 'jsonwebtoken';
-import type { AuthResponse, User } from '../../shared/types';
+import type { AuthResponse, User } from '../../shared/types.js';
 
 const router = express.Router();
 

@@ -2,11 +2,11 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { createServer } from 'http';
-import authRoutes from './routes/auth';
-import dataRoutes from './routes/data';
-import symbolRoutes from './routes/symbols';
-import optionsRoutes from './routes/options';
-import fnoRoutes from './routes/fno';
+import authRoutes from './routes/auth.js';
+import dataRoutes from './routes/data.js';
+import symbolRoutes from './routes/symbols.js';
+import optionsRoutes from './routes/options.js';
+import fnoRoutes from './routes/fno.js';
 
 dotenv.config();
 
@@ -30,7 +30,7 @@ export async function initializeWebSocket() {
 
   try {
     const { Server } = await import('socket.io');
-    const WebSocketService = (await import('./services/websocketService')).default;
+    const WebSocketService = (await import('./services/websocketService.js')).default;
     
     server = createServer(app);
     io = new Server(server, {
