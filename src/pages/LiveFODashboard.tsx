@@ -97,14 +97,22 @@ const LiveFODashboard = () => {
       console.log('Summary response:', summaryResponse);
 
       if (marketDataResponse && marketDataResponse.stocks) {
-        // Show data even if partial (less than 15 symbols)
-        if (marketDataResponse.stocks.length > 0) {
-          setStocks(marketDataResponse.stocks);
+        // Filter out placeholder data (symbols with spot = 0)
+        const validStocks = marketDataResponse.stocks.filter(stock => stock.spot > 0);
+        
+        if (validStocks.length > 0) {
+          setStocks(validStocks);
           if (summaryResponse && summaryResponse.summary) {
             setMarketSummary(summaryResponse.summary);
           }
           setLastUpdate(new Date());
-          setError(null); // Clear any previous errors
+          
+          // Show warning if we have placeholder data or warning message
+          if (marketDataResponse.warning) {
+            setError(marketDataResponse.warning);
+          } else {
+            setError(null);
+          }
           
           // Show info message if we got partial data
           if (marketDataResponse.fetchedCount && marketDataResponse.requestedCount) {
@@ -115,11 +123,9 @@ const LiveFODashboard = () => {
             }
           }
         } else {
-          console.warn('No stocks data returned from API - empty array');
-          // Only show error if we don't have cached data
-          if (!marketDataResponse.fromCache) {
-            setError('No market data available at the moment. The market might be closed or data is temporarily unavailable.');
-          }
+          // No valid data - show warning message
+          const warningMsg = marketDataResponse.warning || 'No market data available at the moment. The market might be closed or data is temporarily unavailable.';
+          setError(warningMsg);
           setStocks([]);
         }
       } else {
@@ -144,10 +150,7 @@ const LiveFODashboard = () => {
         }, 2000);
       } else if (err.response?.status === 429) {
         setError('Too many requests. Please wait a moment and try again.');
-        // Retry after 5 seconds
-        setTimeout(() => {
-          fetchMarketData();
-        }, 5000);
+        // Don't auto-retry on rate limit - let user retry manually after waiting
       } else {
         setError(err.message || 'Failed to fetch market data. Please check console for details.');
       }

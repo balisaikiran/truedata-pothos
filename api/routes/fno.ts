@@ -228,8 +228,9 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
       'HCLTECH', 'AXISBANK', 'MARUTI', 'SUNPHARMA', 'TITAN', 'ULTRACEMCO'
     ];
     
-    // Fetch 8 symbols initially to avoid rate limiting (reduced from 10)
-    const symbolsToFetch = prioritySymbols.slice(0, 8);
+    // Fetch 5 symbols initially to avoid rate limiting (reduced from 8)
+    // This ensures we can get data quickly even with rate limits
+    const symbolsToFetch = prioritySymbols.slice(0, 5);
     console.log(`Fetching LTP for ${symbolsToFetch.length} symbols...`);
     console.log(`Using token: ${trueDataToken ? `${trueDataToken.substring(0, 20)}...` : 'MISSING'}`);
     console.log(`API URL: ${process.env.TRUEDATA_HISTORY_URL}`);
@@ -254,10 +255,10 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
         timestamp: string;
       }> = [];
       
-      // Add overall timeout - if we exceed 15 seconds, return what we have (reduced from 20)
+      // Add overall timeout - if we exceed 12 seconds, return what we have (reduced from 15)
       const startTime = Date.now();
-      const maxTime = 15000; // 15 seconds max (reduced to avoid frontend timeout)
-      const earlyReturnTime = 6000; // Return early if we get at least 3 symbols within 6 seconds
+      const maxTime = 12000; // 12 seconds max (reduced to avoid frontend timeout)
+      const earlyReturnTime = 5000; // Return early if we get at least 2 symbols within 5 seconds
       let earlyReturnTriggered = false;
       
       // Process sequentially (one at a time) to avoid rate limiting
@@ -271,14 +272,14 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
         }
         
         // Early return if we got enough data quickly (reduced threshold)
-        if (!earlyReturnTriggered && elapsed > earlyReturnTime && validLTPResults.length >= 3) {
+        if (!earlyReturnTriggered && elapsed > earlyReturnTime && validLTPResults.length >= 2) {
           console.log(`✅ Early return: Got ${validLTPResults.length} symbols in ${elapsed}ms`);
           earlyReturnTriggered = true;
           break;
         }
         
-        // If we got at least 5 symbols, return early to avoid timeout
-        if (validLTPResults.length >= 5 && elapsed > 8000) {
+        // If we got at least 3 symbols, return early to avoid timeout
+        if (validLTPResults.length >= 3 && elapsed > 8000) {
           console.log(`✅ Early return: Got ${validLTPResults.length} symbols, returning early to avoid timeout`);
           break;
         }
@@ -347,23 +348,23 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
                 lastError = error;
                 const status = error.response?.status;
                 
-                // Handle 429 (Rate Limit) - skip retries if we already have some data
+                // Handle 429 (Rate Limit) - skip retries immediately to avoid timeout
                 if (status === 429) {
-                  // If we already have data and are rate limited, skip retries to avoid timeout
-                  if (validLTPResults.length >= 3) {
+                  // If we already have data, skip immediately
+                  if (validLTPResults.length >= 2) {
                     console.warn(`⚠️  ${symbol} - Rate limited (429), skipping (already have ${validLTPResults.length} symbols)`);
-                    break; // Skip retries if we have enough data
+                    break; // Skip immediately if we have enough data
                   }
                   
-                  retries++;
-                  if (retries < maxRetries) {
-                    const waitTime = Math.min(2000 * retries, 5000); // 2s, 4s (increased delays)
-                    console.warn(`⚠️  ${symbol} - Rate limited (429), retrying in ${waitTime}ms (attempt ${retries}/${maxRetries})`);
-                    await new Promise(resolve => setTimeout(resolve, waitTime));
-                    continue; // Retry
+                  // Only retry once if we don't have enough data yet
+                  if (retries === 0) {
+                    retries++;
+                    console.warn(`⚠️  ${symbol} - Rate limited (429), retrying once in 2000ms`);
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                    continue; // Retry once
                   } else {
-                    console.error(`✗ ${symbol} - Rate limited (429), max retries reached, skipping`);
-                    break; // Give up after max retries
+                    console.error(`✗ ${symbol} - Rate limited (429), skipping after retry`);
+                    break; // Give up after one retry
                   }
                 } else {
                   // Other errors, don't retry
@@ -386,10 +387,10 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
           console.error(`✗ ${symbol} - Unexpected error:`, finalError.message);
         }
         
-        // Delay between requests to avoid rate limiting (increased significantly)
-        if (batchStart + batchSize < symbolsToFetch.length && !earlyReturnTriggered) {
-          await new Promise(resolve => setTimeout(resolve, 2000)); // 2 second delay between requests
-        }
+          // Delay between requests to avoid rate limiting (increased significantly)
+          if (batchStart + batchSize < symbolsToFetch.length && !earlyReturnTriggered) {
+            await new Promise(resolve => setTimeout(resolve, 3000)); // 3 second delay between requests
+          }
         
         // Log progress
         console.log(`✓ Processed ${batchNum} symbols: Got ${validLTPResults.length} successful so far`);
@@ -525,21 +526,31 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
         return res.json({
           stocks: cachedData,
           fromCache: true,
-          timestamp: new Date().toISOString()
+          timestamp: new Date().toISOString(),
+          warning: 'Showing cached data due to rate limiting'
         });
       }
-      // If no cache and no data, return empty array but don't throw error
-      console.warn('⚠️  No data available and no cache - returning empty array');
-      console.warn('⚠️  This likely means:');
-      console.warn('    1. Market is closed');
-      console.warn('    2. TrueData API is down');
-      console.warn('    3. Authentication token is invalid');
-      console.warn('    4. Rate limiting is blocking requests');
+      
+      // If no cache and no data, return at least one placeholder to show something
+      console.warn('⚠️  No data available and no cache - returning placeholder');
       return res.json({
-        stocks: [],
+        stocks: [
+          {
+            symbol: 'NIFTY',
+            spot: 0,
+            change: 0,
+            changePercent: 0,
+            volume: 0,
+            iv: 0,
+            ivRank: 0,
+            ivPercentile: 0,
+            gammaSignal: false,
+            timestamp: new Date().toISOString()
+          }
+        ],
         fromCache: false,
         timestamp: new Date().toISOString(),
-        warning: 'No market data available. Market might be closed or API is temporarily unavailable.'
+        warning: 'No market data available. Market might be closed or API is temporarily unavailable. Please try again in a few moments.'
       });
     }
 

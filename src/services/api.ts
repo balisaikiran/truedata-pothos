@@ -78,7 +78,7 @@ class ApiService {
   // Retry logic with exponential backoff
   private async retryWithBackoff<T>(
     fn: () => Promise<T>,
-    maxRetries: number = 3,
+    maxRetries: number = 1, // Reduced from 3 to 1 to avoid rate limiting
     baseDelay: number = 1000
   ): Promise<T> {
     let lastError: any;
@@ -130,10 +130,25 @@ class ApiService {
 
   // Data endpoints
   async getLTP(symbol: string): Promise<LTPResponse> {
-    return this.retryWithBackoff(async () => {
-      const response: AxiosResponse<LTPResponse> = await this.api.get(`/api/data/ltp/${symbol}`);
+    // Don't retry if rate limited - just return error
+    try {
+      const response: AxiosResponse<LTPResponse> = await this.api.get(`/api/data/ltp/${symbol}`, {
+        timeout: 5000 // Reduced timeout
+      });
       return response.data;
-    });
+    } catch (error: any) {
+      // Don't retry on rate limit errors
+      if (error.response?.status === 429) {
+        throw error; // Throw immediately without retry
+      }
+      // Only retry once for other errors
+      return this.retryWithBackoff(async () => {
+        const response: AxiosResponse<LTPResponse> = await this.api.get(`/api/data/ltp/${symbol}`, {
+          timeout: 5000
+        });
+        return response.data;
+      }, 1, 1000);
+    }
   }
 
   async getBars(
