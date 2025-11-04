@@ -184,9 +184,10 @@ interface FNOMarketSummary {
 
 // Get F&O market data for top stocks
 router.get('/market-data', authenticateToken, async (req: any, res) => {
+  const cacheKey = 'fno_market_data';
+  
   try {
     const { trueDataToken } = req.user;
-    const cacheKey = 'fno_market_data';
     
     // Check cache first
     const cachedData = cache.get<FNOStockData[]>(cacheKey);
@@ -227,12 +228,12 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
       'HCLTECH', 'AXISBANK', 'MARUTI', 'SUNPHARMA', 'TITAN', 'ULTRACEMCO'
     ];
     
-    // Fetch only 10 symbols to reduce timeout risk
-    const symbolsToFetch = prioritySymbols.slice(0, 10);
+    // Fetch 15 symbols - use parallel requests with concurrency limit for better performance
+    const symbolsToFetch = prioritySymbols.slice(0, 15);
     console.log(`Fetching LTP for ${symbolsToFetch.length} symbols...`);
     
     try {
-      // Fetch with shorter delays and timeout protection
+      // Fetch with parallel requests (batched to avoid rate limits)
       const validLTPResults: Array<{
         symbol: string;
         ltp: number;
@@ -241,76 +242,80 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
         timestamp: string;
       }> = [];
       
-      // Add overall timeout - if we exceed 15 seconds, return what we have
+      // Add overall timeout - if we exceed 20 seconds, return what we have
       const startTime = Date.now();
-      const maxTime = 15000; // 15 seconds max
+      const maxTime = 20000; // 20 seconds max
       
-      for (let i = 0; i < symbolsToFetch.length; i++) {
-        // Check if we're running out of time
+      // Process in batches of 3 to avoid rate limits
+      const batchSize = 3;
+      for (let batchStart = 0; batchStart < symbolsToFetch.length; batchStart += batchSize) {
+        // Check timeout
         if (Date.now() - startTime > maxTime) {
           console.log(`Timeout approaching, returning ${validLTPResults.length} symbols`);
           break;
         }
         
-        // If we have at least 5 successful results, we can return early
-        if (validLTPResults.length >= 5 && Date.now() - startTime > 8000) {
-          console.log(`Early return: Got ${validLTPResults.length} symbols, returning early`);
-          break;
-        }
+        const batch = symbolsToFetch.slice(batchStart, batchStart + batchSize);
         
-        const symbol = symbolsToFetch[i];
-        
-        // Reduced delay - 150ms instead of 500ms
-        if (i > 0) {
-          await new Promise(resolve => setTimeout(resolve, 150));
-        }
-        
-        try {
-          // Direct TrueData call with shorter timeout
-          const response = await axios.get(`${process.env.TRUEDATA_HISTORY_URL}/getLTPBulk`, {
-            params: {
-              symbols: symbol,
-              response: 'json'
-            },
-            headers: {
-              'Authorization': `Bearer ${trueDataToken}`
-            },
-            timeout: 5000 // Reduced from 6000 to 5000
-          });
+        // Process batch in parallel
+        const batchPromises = batch.map(async (symbol) => {
+          try {
+            const response = await axios.get(`${process.env.TRUEDATA_HISTORY_URL}/getLTPBulk`, {
+              params: {
+                symbols: symbol,
+                response: 'json'
+              },
+              headers: {
+                'Authorization': `Bearer ${trueDataToken}`
+              },
+              timeout: 6000
+            });
 
-          // EXACT same parsing as working endpoint
-          if (response.data && response.data.status === 'Success' && 
-              response.data.Records && response.data.Records.length > 0) {
-            const record = response.data.Records[0];
-            
-            // TrueData getLTPBulk returns: [symbolId, timestamp, price, volume, change]
-            if (Array.isArray(record) && record.length >= 5) {
-              const ltp = parseFloat(record[2] || 0); // price is at index 2
-              const volume = parseInt(record[3] || 0); // volume is at index 3
-              const change = parseFloat(record[4] || 0); // change is at index 4
+            // EXACT same parsing as working endpoint
+            if (response.data && response.data.status === 'Success' && 
+                response.data.Records && response.data.Records.length > 0) {
+              const record = response.data.Records[0];
               
-              if (ltp > 0) {
-                validLTPResults.push({
-                  symbol: symbol,
-                  ltp: ltp,
-                  volume: volume,
-                  change: change,
-                  timestamp: record[1] || new Date().toISOString()
-                });
+              // TrueData getLTPBulk returns: [symbolId, timestamp, price, volume, change]
+              if (Array.isArray(record) && record.length >= 5) {
+                const ltp = parseFloat(record[2] || 0); // price is at index 2
+                const volume = parseInt(record[3] || 0); // volume is at index 3
+                const change = parseFloat(record[4] || 0); // change is at index 4
                 
-                // Log first few successes
-                if (i < 3) {
-                  console.log(`✓ ${symbol} - Price: ${ltp}, Change: ${change}`);
+                if (ltp > 0) {
+                  return {
+                    symbol: symbol,
+                    ltp: ltp,
+                    volume: volume,
+                    change: change,
+                    timestamp: record[1] || new Date().toISOString()
+                  };
                 }
               }
             }
+            return null;
+          } catch (error: any) {
+            // Log errors for first batch only
+            if (batchStart === 0) {
+              console.error(`✗ ${symbol} - Failed:`, error.response?.status || 'No status', error.message);
+            }
+            return null;
           }
-        } catch (error: any) {
-          // Log errors for first few only
-          if (i < 3) {
-            console.error(`✗ ${symbol} - Failed:`, error.response?.status || 'No status', error.message);
-          }
-          // Continue with next symbol
+        });
+        
+        // Wait for batch to complete
+        const batchResults = await Promise.all(batchPromises);
+        const validBatchResults = batchResults.filter((result): result is NonNullable<typeof result> => result !== null);
+        validLTPResults.push(...validBatchResults);
+        
+        // Log progress
+        if (batchStart === 0) {
+          console.log(`✓ Batch 1: Got ${validBatchResults.length}/${batch.length} symbols`);
+        }
+        
+        // Small delay between batches (except last batch)
+        if (batchStart + batchSize < symbolsToFetch.length) {
+          await new Promise(resolve => setTimeout(resolve, 300));
         }
       }
 
@@ -399,22 +404,62 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
     // Filter out null results
     const validStocks = fnoStocks.filter((stock): stock is FNOStockData => stock !== null);
 
-    // Cache the data for 30 seconds if we have data
+    // Cache the data for 60 seconds if we have data (increased from 30)
     if (validStocks.length > 0) {
       cache.set(cacheKey, validStocks, CacheTTL.SHORT);
+      console.log(`✅ Cached ${validStocks.length} stocks for 60 seconds`);
     }
 
     console.log(`Returning ${validStocks.length} stocks to frontend (${validStocks.filter(s => s.iv > 0).length} with IV data)`);
 
+    // Always return data, even if partial - better than showing error
+    if (validStocks.length === 0) {
+      console.warn('⚠️  No stocks data available - checking cache');
+      // Check if we have cached data to return
+      const cachedData = cache.get<FNOStockData[]>(cacheKey);
+      if (cachedData && cachedData.length > 0) {
+        console.log(`✅ Returning cached data (${cachedData.length} stocks)`);
+        return res.json({
+          stocks: cachedData,
+          fromCache: true,
+          timestamp: new Date().toISOString()
+        });
+      }
+      // If no cache and no data, return empty array but don't throw error
+      console.warn('⚠️  No data available and no cache - returning empty array');
+      return res.json({
+        stocks: [],
+        fromCache: false,
+        timestamp: new Date().toISOString(),
+        warning: 'No market data available. Market might be closed or API is temporarily unavailable.'
+      });
+    }
+
+    // Return partial results even if we didn't get all 15 symbols
+    console.log(`✅ Successfully fetched ${validStocks.length} out of ${symbolsToFetch.length} symbols`);
     res.json({
       stocks: validStocks,
       fromCache: false,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      fetchedCount: validStocks.length,
+      requestedCount: symbolsToFetch.length
     });
 
   } catch (error: any) {
     console.error('F&O market data fetch error:', error.response?.data || error.message);
     console.error('Full error:', error);
+    
+    // Try to return cached data if available
+    const cachedData = cache.get<FNOStockData[]>(cacheKey);
+    if (cachedData && cachedData.length > 0) {
+      console.log(`✅ Error occurred, returning cached data (${cachedData.length} stocks)`);
+      return res.json({
+        stocks: cachedData,
+        fromCache: true,
+        timestamp: new Date().toISOString(),
+        error: 'Using cached data due to fetch error'
+      });
+    }
     
     // Always return a response, even if empty, to avoid 500 errors
     try {

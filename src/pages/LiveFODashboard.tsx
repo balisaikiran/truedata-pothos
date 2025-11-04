@@ -97,6 +97,7 @@ const LiveFODashboard = () => {
       console.log('Summary response:', summaryResponse);
 
       if (marketDataResponse && marketDataResponse.stocks) {
+        // Show data even if partial (less than 15 symbols)
         if (marketDataResponse.stocks.length > 0) {
           setStocks(marketDataResponse.stocks);
           if (summaryResponse && summaryResponse.summary) {
@@ -104,9 +105,21 @@ const LiveFODashboard = () => {
           }
           setLastUpdate(new Date());
           setError(null); // Clear any previous errors
+          
+          // Show info message if we got partial data
+          if (marketDataResponse.fetchedCount && marketDataResponse.requestedCount) {
+            const fetched = marketDataResponse.fetchedCount;
+            const requested = marketDataResponse.requestedCount;
+            if (fetched < requested) {
+              console.log(`Got ${fetched} out of ${requested} symbols - showing partial data`);
+            }
+          }
         } else {
           console.warn('No stocks data returned from API - empty array');
-          setError('No market data available at the moment. The market might be closed or data is temporarily unavailable.');
+          // Only show error if we don't have cached data
+          if (!marketDataResponse.fromCache) {
+            setError('No market data available at the moment. The market might be closed or data is temporarily unavailable.');
+          }
           setStocks([]);
         }
       } else {
