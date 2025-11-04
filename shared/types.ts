@@ -47,7 +47,7 @@ export interface OptionData {
 export interface LiveDataUpdate {
   type: 'ltp' | 'tick' | 'bar' | 'option';
   symbol: string;
-  data: TickData | BarData | OptionData;
+  data: TickData | BarData | OptionData | LTPResponse;
   timestamp: string;
 }
 
