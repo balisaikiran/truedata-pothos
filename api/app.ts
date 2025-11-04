@@ -96,6 +96,8 @@ const asyncHandler = (fn: Function) => (req: express.Request, res: express.Respo
 };
 
 // Routes
+// Note: Routes are mounted at /api/* because Vercel rewrites /api/* to /api/index
+// The full path in the request will be /api/auth/login, etc.
 app.use('/api/auth', authRoutes);
 app.use('/api/data', dataRoutes);
 app.use('/api/symbols', symbolRoutes);
