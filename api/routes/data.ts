@@ -5,6 +5,7 @@ import type { LTPResponse, BarData, TickData } from '../../shared/types.js';
 import { handleTrueDataError, sendErrorResponse } from '../utils/errorHandler.js';
 import { cache, CacheKeys, CacheTTL } from '../utils/cache.js';
 import { ltpRateLimiter, barsRateLimiter, ticksRateLimiter } from '../utils/rateLimiter.js';
+import { getCachedData, cacheData } from '../utils/supabase.js';
 
 const router = express.Router();
 
@@ -15,10 +16,23 @@ router.get('/ltp/:symbol', authenticateToken, async (req, res) => {
     const trueDataToken = (req as any).user.trueDataToken;
     const cacheKey = CacheKeys.LTP(symbol);
     
-    // Check cache first
-    const cachedData = cache.get<LTPResponse>(cacheKey);
-    if (cachedData) {
-      return res.json({ ...cachedData, fromCache: true });
+    // Check Supabase cache first (persistent cache)
+    let cachedData: LTPResponse | null = null;
+    try {
+      cachedData = await getCachedData<LTPResponse>('ltp_cache', cacheKey);
+      if (cachedData) {
+        console.log(`✅ [Supabase] Returning cached LTP for ${symbol}`);
+        return res.json({ ...cachedData, fromCache: true, fromSupabase: true });
+      }
+    } catch (supabaseError: any) {
+      console.warn('[Supabase] Cache check failed, falling back to memory cache:', supabaseError.message);
+    }
+    
+    // Fallback to memory cache
+    const memoryCachedData = cache.get<LTPResponse>(cacheKey);
+    if (memoryCachedData) {
+      console.log(`✅ [Memory] Returning cached LTP for ${symbol}`);
+      return res.json({ ...memoryCachedData, fromCache: true, fromMemory: true });
     }
 
     // Check rate limit
@@ -58,7 +72,14 @@ router.get('/ltp/:symbol', authenticateToken, async (req, res) => {
         low: 0 // Not provided in this format
       };
 
-      // Cache the response
+      // Cache the response in both Supabase and memory
+      try {
+        await cacheData('ltp_cache', cacheKey, ltpResponse, 2); // 2 minutes TTL
+        console.log(`✅ [Supabase] Cached LTP for ${symbol}`);
+      } catch (supabaseError: any) {
+        console.warn('[Supabase] Failed to cache LTP, using memory cache only:', supabaseError.message);
+      }
+      
       cache.set(cacheKey, ltpResponse, CacheTTL.LTP);
       
       res.json(ltpResponse);
