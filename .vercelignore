@@ -1,0 +1,11 @@
+# Ignore these files from being treated as serverless functions
+# Only api/index.ts should be a serverless function
+
+api/app.ts
+api/server.ts
+api/routes/**
+api/services/**
+api/utils/**
+*.md
+*.sql
+
