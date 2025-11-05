@@ -4,7 +4,7 @@
  * IMPORTANT: This is the ONLY serverless function - all routes are handled by Express app
  */
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import app from './app.js';
+import app from '../lib/app.js';
 
 console.log('✅ Express app loaded successfully');
 

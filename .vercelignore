@@ -1,11 +1,6 @@
-# Ignore these files from being treated as serverless functions
 # Only api/index.ts should be a serverless function
+# All other TypeScript files are now in lib/ directory and won't be treated as functions
 
-api/app.ts
-api/server.ts
-api/routes/**
-api/services/**
-api/utils/**
+# Exclude documentation and SQL files
 *.md
 *.sql
-
