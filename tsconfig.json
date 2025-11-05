@@ -12,6 +12,8 @@
     "skipLibCheck": true,
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
     "verbatimModuleSyntax": false,
     "moduleDetection": "force",
     "noEmit": true,
@@ -34,7 +36,11 @@
     ]
   },
   "include": [
-    "src",
+    "src"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
     "api"
   ]
 }
