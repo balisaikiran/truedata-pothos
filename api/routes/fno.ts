@@ -5,6 +5,7 @@ import type { LTPResponse } from '../../shared/types.js';
 import { handleTrueDataError, sendErrorResponse } from '../utils/errorHandler.js';
 import { cache, CacheKeys, CacheTTL } from '../utils/cache.js';
 import { ltpRateLimiter } from '../utils/rateLimiter.js';
+import { getCachedData, cacheData } from '../utils/supabase.js';
 
 const router = express.Router();
 
@@ -371,12 +372,31 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
   try {
     const { trueDataToken } = req.user;
     
-    // Check cache first
-    const cachedData = cache.get<FNOStockData[]>(cacheKey);
-    if (cachedData) {
+    // Check Supabase cache first (persistent cache)
+    let cachedData: FNOStockData[] | null = null;
+    try {
+      cachedData = await getCachedData<FNOStockData[]>('fno_market_cache', cacheKey);
+      if (cachedData && cachedData.length > 0) {
+        console.log(`✅ [Supabase] Returning cached FNO market data (${cachedData.length} stocks)`);
+        return res.json({ 
+          stocks: cachedData, 
+          fromCache: true,
+          fromSupabase: true,
+          timestamp: new Date().toISOString()
+        });
+      }
+    } catch (supabaseError: any) {
+      console.warn('[Supabase] Cache check failed, falling back to memory cache:', supabaseError.message);
+    }
+    
+    // Fallback to memory cache
+    const memoryCachedData = cache.get<FNOStockData[]>(cacheKey);
+    if (memoryCachedData && memoryCachedData.length > 0) {
+      console.log(`✅ [Memory] Returning cached FNO market data (${memoryCachedData.length} stocks)`);
       return res.json({ 
-        stocks: cachedData, 
+        stocks: memoryCachedData, 
         fromCache: true,
+        fromMemory: true,
         timestamp: new Date().toISOString()
       });
     }
@@ -835,10 +855,19 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
     // Filter out null results
     const validStocks = fnoStocks.filter((stock): stock is FNOStockData => stock !== null);
 
-    // Cache the data for 60 seconds if we have data (increased from 30)
+    // Cache the data in both Supabase (persistent) and memory cache
     if (validStocks.length > 0) {
+      // Save to Supabase cache (5 minutes TTL)
+      try {
+        await cacheData('fno_market_cache', cacheKey, validStocks, 5);
+        console.log(`✅ [Supabase] Cached ${validStocks.length} stocks for 5 minutes`);
+      } catch (supabaseError: any) {
+        console.warn('[Supabase] Failed to cache data, using memory cache only:', supabaseError.message);
+      }
+      
+      // Also save to memory cache (60 seconds)
       cache.set(cacheKey, validStocks, CacheTTL.SHORT);
-      console.log(`✅ Cached ${validStocks.length} stocks for 60 seconds`);
+      console.log(`✅ [Memory] Cached ${validStocks.length} stocks for 60 seconds`);
     }
 
     console.log(`Returning ${validStocks.length} stocks to frontend (${validStocks.filter(s => s.iv > 0).length} with IV data)`);
