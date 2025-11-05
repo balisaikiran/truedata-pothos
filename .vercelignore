@@ -1,11 +1,7 @@
-# Ignore these files from being treated as serverless functions
-# Only api/index.ts should be a serverless function
+# Note: Vercel will automatically compile all TypeScript files in api/
+# Don't ignore them - they need to be compiled
+# Only ignore non-TypeScript files
 
-api/app.ts
-api/server.ts
-api/routes/**
-api/services/**
-api/utils/**
 *.md
 *.sql
 
