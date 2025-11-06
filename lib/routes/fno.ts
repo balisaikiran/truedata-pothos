@@ -514,8 +514,8 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
                   const record = response.data.Records[0];
                   
                   // Log full record structure for debugging (first symbol only)
-                  if (batchStart === 0) {
-                    console.log(`[${symbol}] Full API response record:`, JSON.stringify(record));
+                  if (batchStart === 0 && batchNum === 0) {
+                    console.log(`\n[${symbol}] Full API response record:`, JSON.stringify(record));
                     console.log(`[${symbol}] Record length: ${Array.isArray(record) ? record.length : 'not array'}`);
                     if (Array.isArray(record)) {
                       record.forEach((val: any, idx: number) => {
@@ -533,36 +533,20 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
                     let change = 0;
                     let timestamp = '';
                     
-                    // Find price - should be a reasonable positive number (not symbolId, not timestamp)
+                    // Step 1: Find price first (needed to validate other fields)
+                    let priceIndex = -1;
                     for (let i = 0; i < record.length; i++) {
                       const val = record[i];
                       if (val !== null && val !== undefined) {
                         const numVal = parseFloat(val);
-                        if (!isNaN(numVal) && numVal > 0 && numVal < 1000000) {
+                        // Exclude years (2020-2099) and other invalid values
+                        const isYear = numVal >= 2020 && numVal <= 2099;
+                        if (!isNaN(numVal) && numVal > 0 && numVal < 1000000 && !isYear) {
                           // Likely price - check if it's reasonable (not too small, not too large)
                           if (numVal > 1 && numVal < 100000 && ltp === 0) {
                             ltp = numVal;
-                            // Volume might be next, or a few positions away
-                            // Change might be next after volume
-                            // Try to find volume (usually a large integer)
-                            for (let j = i + 1; j < Math.min(record.length, i + 5); j++) {
-                              const volVal = record[j];
-                              if (volVal !== null && volVal !== undefined) {
-                                const volNum = parseInt(volVal);
-                                if (!isNaN(volNum) && volNum >= 0 && volNum < 1000000000) {
-                                  // Volume is usually a large integer
-                                  if (volNum > 0 && volume === 0) {
-                                    volume = volNum;
-                                  }
-                                }
-                                // Change might be a small decimal (could be positive or negative)
-                                const changeNum = parseFloat(volVal);
-                                if (!isNaN(changeNum) && Math.abs(changeNum) < 10000 && change === 0 && volNum === 0) {
-                                  change = changeNum;
-                                }
-                              }
-                            }
-                            break;
+                            priceIndex = i;
+                            break; // Found price, now find volume and change
                           }
                         }
                         // Timestamp might be a string or number
@@ -572,28 +556,109 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
                       }
                     }
                     
+                    // Step 2: Find volume - scan ALL fields for large integers (volume can be anywhere)
+                    if (ltp > 0) {
+                      for (let i = 0; i < record.length; i++) {
+                        // Skip the price index to avoid confusion
+                        if (i === priceIndex) continue;
+                        
+                        const val = record[i];
+                        if (val !== null && val !== undefined) {
+                          const volNum = parseInt(val);
+                          // Volume: large integer (>= 100, can be very large), not a year, not the price
+                          const isYear = volNum >= 2020 && volNum <= 2099;
+                          const isPrice = Math.abs(volNum - ltp) < 0.01;
+                          if (!isNaN(volNum) && volNum >= 0 && volNum < 10000000000 && !isYear && !isPrice && volume === 0) {
+                            // Prefer larger volumes (likely real volume), but accept any positive integer
+                            volume = volNum;
+                            // Don't break - keep looking for larger volume values
+                          }
+                        }
+                      }
+                    }
+                    
+                    // Step 3: Find change - scan ALL fields for small decimals (change can be positive or negative)
+                    if (ltp > 0) {
+                      for (let i = 0; i < record.length; i++) {
+                        // Skip the price index to avoid confusion
+                        if (i === priceIndex) continue;
+                        
+                        const val = record[i];
+                        if (val !== null && val !== undefined) {
+                          const changeNum = parseFloat(val);
+                          // Change: small decimal (can be negative), typically much smaller than price
+                          // Change is usually within reasonable range: -10000 to +10000 (for most stocks)
+                          const isYear = changeNum >= 2020 && changeNum <= 2099;
+                          const isPrice = Math.abs(changeNum - ltp) < 0.01;
+                          const isVolume = Math.abs(changeNum - volume) < 0.01;
+                          // Change should be smaller than price (typically)
+                          if (!isNaN(changeNum) && Math.abs(changeNum) < Math.max(ltp * 2, 50000) && 
+                              !isYear && !isPrice && !isVolume && change === 0) {
+                            // Accept if it's a reasonable change value
+                            change = changeNum;
+                            break; // Found change, stop searching
+                          }
+                        }
+                      }
+                    }
+                    
                     // Fallback to documented positions if auto-detection failed
                     if (ltp === 0 && record.length >= 5) {
                       // Try standard positions: [symbolId, timestamp, price, volume, change]
-                      ltp = parseFloat(record[2] || 0);
+                      const candidateLtp = parseFloat(record[2] || 0);
+                      // Exclude years (2020-2099) from being treated as prices
+                      const isYear = candidateLtp >= 2020 && candidateLtp <= 2099;
+                      if (!isYear && candidateLtp > 0 && candidateLtp < 100000) {
+                        ltp = candidateLtp;
+                      }
                       volume = parseInt(record[3] || 0);
                       change = parseFloat(record[4] || 0);
                       timestamp = record[1] || new Date().toISOString();
                       
-                      // If still no volume/change, try scanning all fields
+                      // If still no LTP, try scanning all fields (excluding years)
+                      if (ltp === 0) {
+                        for (let k = 0; k < record.length; k++) {
+                          const testVal = record[k];
+                          if (testVal !== null && testVal !== undefined) {
+                            const testNum = parseFloat(testVal);
+                            const isYear = testNum >= 2020 && testNum <= 2099;
+                            if (!isNaN(testNum) && !isYear && testNum > 1 && testNum < 100000 && ltp === 0) {
+                              ltp = testNum;
+                              break; // Found price, stop searching
+                            }
+                          }
+                        }
+                      }
+                      
+                      // If still no volume/change, try scanning all fields more thoroughly
                       if (volume === 0 || change === 0) {
-                        // Try to find volume (large integer, usually after price)
-                        for (let k = 2; k < record.length; k++) {
+                        // Find volume: scan all fields for large integers
+                        for (let k = 0; k < record.length; k++) {
                           const testVal = record[k];
                           if (testVal !== null && testVal !== undefined) {
                             const testNum = parseInt(testVal);
-                            if (!isNaN(testNum) && testNum > 1000 && testNum < 1000000000 && volume === 0) {
+                            const isYear = testNum >= 2020 && testNum <= 2099;
+                            const isPrice = ltp > 0 && Math.abs(testNum - ltp) < 0.01;
+                            // Volume: any positive integer (even small ones), not year, not price
+                            if (!isNaN(testNum) && testNum >= 0 && testNum < 10000000000 && !isYear && !isPrice && volume === 0) {
                               volume = testNum;
                             }
-                            // Try to find change (small decimal, can be negative)
+                          }
+                        }
+                        
+                        // Find change: scan all fields for small decimals
+                        for (let k = 0; k < record.length; k++) {
+                          const testVal = record[k];
+                          if (testVal !== null && testVal !== undefined) {
                             const testChange = parseFloat(testVal);
-                            if (!isNaN(testChange) && Math.abs(testChange) < 1000 && change === 0 && testNum === 0) {
+                            const isYear = testChange >= 2020 && testChange <= 2099;
+                            const isPrice = ltp > 0 && Math.abs(testChange - ltp) < 0.01;
+                            const isVolume = volume > 0 && Math.abs(testChange - volume) < 0.01;
+                            // Change: can be negative, typically smaller than price
+                            if (!isNaN(testChange) && Math.abs(testChange) < Math.max(ltp * 2, 50000) && 
+                                !isYear && !isPrice && !isVolume && change === 0) {
                               change = testChange;
+                              break; // Found change, stop
                             }
                           }
                         }
@@ -601,7 +666,18 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
                     }
                     
                     if (ltp > 0) {
-                      console.log(`✓ ${symbol} - LTP: ${ltp}, Volume: ${volume}, Change: ${change}${change !== 0 ? ` (${((change / (ltp - change)) * 100).toFixed(2)}%)` : ''}`);
+                      // Log parsed values for debugging (only for first few symbols to avoid spam)
+                      if (batchStart < 3) {
+                        console.log(`✓ ${symbol} - Parsed: LTP: ${ltp}, Volume: ${volume}, Change: ${change}${change !== 0 ? ` (${((change / (ltp - change)) * 100).toFixed(2)}%)` : ''}`);
+                        console.log(`✓ ${symbol} - Price index: ${priceIndex}, Record indices used`);
+                        if (volume === 0) {
+                          console.warn(`⚠️  ${symbol} - Volume is 0, record:`, record);
+                        }
+                        if (change === 0) {
+                          console.warn(`⚠️  ${symbol} - Change is 0, record:`, record);
+                        }
+                      }
+                      
                       validLTPResults.push({
                         symbol: symbol,
                         ltp: ltp,
@@ -611,7 +687,9 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
                       });
                       break; // Success, exit retry loop
                     } else {
-                      console.warn(`⚠️  ${symbol} - Invalid LTP (${ltp}), record:`, record);
+                      // Log why parsing failed
+                      console.warn(`⚠️  ${symbol} - Failed to parse LTP, record:`, record);
+                      console.warn(`⚠️  ${symbol} - Record values:`, record.map((v: any, i: number) => `[${i}]: ${v} (${typeof v})`).join(', '));
                       break; // Invalid data, exit retry loop
                     }
                   } else {
@@ -1036,10 +1114,59 @@ router.get('/market-summary', authenticateToken, async (req: any, res) => {
                   response.data.Records && response.data.Records.length > 0) {
                 const record = response.data.Records[0];
                 
-                if (Array.isArray(record) && record.length >= 5) {
-                  const ltp = parseFloat(record[2] || 0);
-                  const volume = parseInt(record[3] || 0);
-                  const change = parseFloat(record[4] || 0);
+                if (Array.isArray(record) && record.length >= 3) {
+                  // Step 1: Find price
+                  let ltp = 0;
+                  let priceIndex = -1;
+                  for (let k = 0; k < record.length; k++) {
+                    const testVal = record[k];
+                    if (testVal !== null && testVal !== undefined) {
+                      const testNum = parseFloat(testVal);
+                      const isYear = testNum >= 2020 && testNum <= 2099;
+                      if (!isNaN(testNum) && !isYear && testNum > 1 && testNum < 100000 && ltp === 0) {
+                        ltp = testNum;
+                        priceIndex = k;
+                        break; // Found price
+                      }
+                    }
+                  }
+                  
+                  // Step 2: Find volume - scan all fields
+                  let volume = 0;
+                  if (ltp > 0) {
+                    for (let k = 0; k < record.length; k++) {
+                      if (k === priceIndex) continue; // Skip price index
+                      const testVal = record[k];
+                      if (testVal !== null && testVal !== undefined) {
+                        const testNum = parseInt(testVal);
+                        const isYear = testNum >= 2020 && testNum <= 2099;
+                        const isPrice = Math.abs(testNum - ltp) < 0.01;
+                        if (!isNaN(testNum) && testNum >= 0 && testNum < 10000000000 && !isYear && !isPrice && volume === 0) {
+                          volume = testNum;
+                        }
+                      }
+                    }
+                  }
+                  
+                  // Step 3: Find change - scan all fields
+                  let change = 0;
+                  if (ltp > 0) {
+                    for (let k = 0; k < record.length; k++) {
+                      if (k === priceIndex) continue; // Skip price index
+                      const testVal = record[k];
+                      if (testVal !== null && testVal !== undefined) {
+                        const testChange = parseFloat(testVal);
+                        const isYear = testChange >= 2020 && testChange <= 2099;
+                        const isPrice = Math.abs(testChange - ltp) < 0.01;
+                        const isVolume = volume > 0 && Math.abs(testChange - volume) < 0.01;
+                        if (!isNaN(testChange) && Math.abs(testChange) < Math.max(ltp * 2, 50000) && 
+                            !isYear && !isPrice && !isVolume && change === 0) {
+                          change = testChange;
+                          break; // Found change
+                        }
+                      }
+                    }
+                  }
                   
                   if (ltp > 0) {
                     validLTPResults.push({
