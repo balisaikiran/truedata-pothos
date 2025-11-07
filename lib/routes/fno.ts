@@ -401,7 +401,7 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
       });
     }
 
-    // Top F&O stocks symbols
+    // Top F&O stocks symbols - ALL symbols we want to show
     const fnoSymbols = [
       'NIFTY', 'BANKNIFTY', 'RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'ICICIBANK', 
       'HINDUNILVR', 'ITC', 'SBIN', 'BHARTIARTL', 'KOTAKBANK', 'LT', 'ASIANPAINT',
@@ -413,6 +413,31 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
       'UPL', 'VEDL', 'SBILIFE', 'APOLLOHOSP'
     ];
 
+    // Load cached data first to use as fallback
+    let cachedStocksMap = new Map<string, FNOStockData>();
+    try {
+      const cachedStocks = await getCachedData<FNOStockData[]>('fno_market_cache', cacheKey);
+      if (cachedStocks && cachedStocks.length > 0) {
+        cachedStocks.forEach(stock => {
+          cachedStocksMap.set(stock.symbol, stock);
+        });
+        console.log(`✅ Loaded ${cachedStocks.length} cached symbols from Supabase`);
+      }
+    } catch (err) {
+      console.warn('Failed to load cached data:', err);
+    }
+    
+    // Also check memory cache
+    const memoryCachedStocks = cache.get<FNOStockData[]>(cacheKey);
+    if (memoryCachedStocks && memoryCachedStocks.length > 0) {
+      memoryCachedStocks.forEach(stock => {
+        if (!cachedStocksMap.has(stock.symbol)) {
+          cachedStocksMap.set(stock.symbol, stock);
+        }
+      });
+      console.log(`✅ Loaded ${memoryCachedStocks.length} cached symbols from memory`);
+    }
+
     // Initialize validLTPData
     let validLTPData: Array<{
       symbol: string;
@@ -422,17 +447,9 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
       timestamp: string;
     }> = [];
 
-    // Use our own working /api/data/ltp endpoint to get reliable data
-    // This ensures we use the exact same logic that works in other parts of the app
-    const prioritySymbols = [
-      'NIFTY', 'BANKNIFTY', 'RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'ICICIBANK',
-      'HINDUNILVR', 'ITC', 'SBIN', 'BHARTIARTL', 'KOTAKBANK', 'LT', 'ASIANPAINT',
-      'HCLTECH', 'AXISBANK', 'MARUTI', 'SUNPHARMA', 'TITAN', 'ULTRACEMCO'
-    ];
-    
-    // Fetch 5 symbols initially to avoid rate limiting (reduced from 8)
-    // This ensures we can get data quickly even with rate limits
-    const symbolsToFetch = prioritySymbols.slice(0, 12);
+    // Fetch ALL symbols, but prioritize fetching new data for symbols not in cache
+    // Strategy: Try to fetch all symbols, but use cached data as fallback
+    const symbolsToFetch = fnoSymbols; // Fetch ALL symbols
     console.log(`Fetching LTP for ${symbolsToFetch.length} symbols...`);
     console.log(`Using token: ${trueDataToken ? `${trueDataToken.substring(0, 20)}...` : 'MISSING'}`);
     console.log(`API URL: ${process.env.TRUEDATA_HISTORY_URL}`);
@@ -462,25 +479,19 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
       const maxTime = 28000; // 28 seconds max (must be less than 30s frontend timeout)
       
       // Process sequentially (one at a time) to avoid rate limiting
+      // Strategy: Fetch as many as possible within timeout, use cache for rest
       const batchSize = 1;
       for (let batchStart = 0; batchStart < symbolsToFetch.length; batchStart += batchSize) {
         // Check timeout
         const elapsed = Date.now() - startTime;
         if (elapsed > maxTime) {
-          console.log(`⏱️  Timeout reached (${elapsed}ms), returning ${validLTPResults.length} symbols`);
-          break;
-        }
-        
-        // Only return early if we have at least 12 symbols (target) OR timeout is very close
-        // Goal: Try to fetch all 12 symbols before timing out
-        if (validLTPResults.length >= 12) {
-          console.log(`✅ Got ${validLTPResults.length} symbols (target reached), returning`);
+          console.log(`⏱️  Timeout reached (${elapsed}ms), fetched ${validLTPResults.length} symbols, will use cache for rest`);
           break;
         }
         
         // If timeout is very close (within 1 second), return what we have
         if (elapsed > maxTime - 1000) {
-          console.log(`⏱️  Approaching timeout (${elapsed}ms), returning ${validLTPResults.length} symbols`);
+          console.log(`⏱️  Approaching timeout (${elapsed}ms), fetched ${validLTPResults.length} symbols, will use cache for rest`);
           break;
         }
         
@@ -711,9 +722,9 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
                 if (status === 429) {
                   const elapsed = Date.now() - startTime;
                   
-                  // Only skip if we have all 12 symbols OR timeout is very close (within 2 seconds)
-                  if (validLTPResults.length >= 12 || elapsed > maxTime - 2000) {
-                    console.warn(`⚠️  ${symbol} - Rate limited (429), skipping (have ${validLTPResults.length} symbols or timeout very close)`);
+                  // Skip if timeout is very close (within 2 seconds)
+                  if (elapsed > maxTime - 2000) {
+                    console.warn(`⚠️  ${symbol} - Rate limited (429), skipping (timeout very close)`);
                     break;
                   }
                   
@@ -922,23 +933,83 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
     
     // Filter out null results
     const validStocks = fnoStocks.filter((stock): stock is FNOStockData => stock !== null);
+    
+    // Create a map of newly fetched stocks
+    const fetchedStocksMap = new Map<string, FNOStockData>();
+    validStocks.forEach(stock => {
+      fetchedStocksMap.set(stock.symbol, stock);
+    });
+    
+    // Merge fetched data with cached data
+    // Strategy: Use newly fetched data if available, otherwise use cached data
+    const mergedStocks: FNOStockData[] = [];
+    const fetchedSymbols = new Set(validStocks.map(s => s.symbol));
+    
+    // First, add all newly fetched stocks
+    validStocks.forEach(stock => {
+      mergedStocks.push(stock);
+    });
+    
+    // Then, add cached stocks for symbols we didn't fetch (or failed to fetch)
+    fnoSymbols.forEach(symbol => {
+      if (!fetchedSymbols.has(symbol) && cachedStocksMap.has(symbol)) {
+        const cachedStock = cachedStocksMap.get(symbol)!;
+        // Mark as cached data
+        mergedStocks.push({
+          ...cachedStock,
+          timestamp: cachedStock.timestamp || new Date().toISOString()
+        });
+        console.log(`✅ Using cached data for ${symbol}`);
+      } else if (!fetchedSymbols.has(symbol) && !cachedStocksMap.has(symbol)) {
+        // Create placeholder for symbols with no data (neither fetched nor cached)
+        mergedStocks.push({
+          symbol,
+          spot: 0,
+          change: 0,
+          changePercent: 0,
+          volume: 0,
+          iv: 0,
+          ivRank: 0,
+          ivPercentile: 0,
+          gammaSignal: false,
+          timestamp: new Date().toISOString()
+        });
+        console.log(`⚠️  No data available for ${symbol}, using placeholder`);
+      }
+    });
+    
+    // Sort merged stocks to match original fnoSymbols order
+    const symbolOrderMap = new Map(fnoSymbols.map((sym, idx) => [sym, idx]));
+    mergedStocks.sort((a, b) => {
+      const aIdx = symbolOrderMap.get(a.symbol) ?? 999;
+      const bIdx = symbolOrderMap.get(b.symbol) ?? 999;
+      return aIdx - bIdx;
+    });
 
-    // Cache the data in both Supabase (persistent) and memory cache
-    if (validStocks.length > 0) {
+    // Cache the merged data in both Supabase (persistent) and memory cache
+    if (mergedStocks.length > 0) {
       // Save to Supabase cache (5 minutes TTL)
       try {
-        await cacheData('fno_market_cache', cacheKey, validStocks, 5);
-        console.log(`✅ [Supabase] Cached ${validStocks.length} stocks for 5 minutes`);
+        await cacheData('fno_market_cache', cacheKey, mergedStocks, 5);
+        console.log(`✅ [Supabase] Cached ${mergedStocks.length} stocks for 5 minutes`);
       } catch (supabaseError: any) {
         console.warn('[Supabase] Failed to cache data, using memory cache only:', supabaseError.message);
       }
       
       // Also save to memory cache (60 seconds)
-      cache.set(cacheKey, validStocks, CacheTTL.SHORT);
-      console.log(`✅ [Memory] Cached ${validStocks.length} stocks for 60 seconds`);
+      cache.set(cacheKey, mergedStocks, CacheTTL.SHORT);
+      console.log(`✅ [Memory] Cached ${mergedStocks.length} stocks for 60 seconds`);
     }
 
-    console.log(`Returning ${validStocks.length} stocks to frontend (${validStocks.filter(s => s.iv > 0).length} with IV data)`);
+    const freshDataCount = validStocks.filter(s => s.spot > 0).length;
+    const cachedDataCount = mergedStocks.filter(s => s.spot > 0 && !fetchedSymbols.has(s.symbol)).length;
+    const placeholderCount = mergedStocks.filter(s => s.spot === 0).length;
+    
+    console.log(`✅ Returning ${mergedStocks.length} stocks to frontend:`);
+    console.log(`   - ${freshDataCount} newly fetched`);
+    console.log(`   - ${cachedDataCount} from cache`);
+    console.log(`   - ${placeholderCount} placeholders (no data available)`);
+    console.log(`   - ${mergedStocks.filter(s => s.iv > 0).length} with IV data`);
 
     // Always return data, even if partial - better than showing error
     if (validStocks.length === 0) {
@@ -978,14 +1049,16 @@ router.get('/market-data', authenticateToken, async (req: any, res) => {
       });
     }
 
-    // Return partial results even if we didn't get all 15 symbols
-    console.log(`✅ Successfully fetched ${validStocks.length} out of ${symbolsToFetch.length} symbols`);
+    // Return all symbols (merged: fetched + cached + placeholders)
     res.json({
-      stocks: validStocks,
+      stocks: mergedStocks,
       fromCache: false,
       timestamp: new Date().toISOString(),
       fetchedCount: validStocks.length,
-      requestedCount: symbolsToFetch.length
+      requestedCount: symbolsToFetch.length,
+      totalCount: mergedStocks.length,
+      cachedCount: cachedDataCount,
+      placeholderCount: placeholderCount
     });
 
   } catch (error: any) {

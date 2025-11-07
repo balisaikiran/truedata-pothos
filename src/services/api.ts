@@ -271,9 +271,9 @@ class ApiService {
     return response.data;
   }
 
-  async getFNOMarketData(): Promise<{ stocks: FNOStockData[]; fromCache: boolean; timestamp: string; fetchedCount?: number; requestedCount?: number; warning?: string }> {
+  async getFNOMarketData(): Promise<{ stocks: FNOStockData[]; fromCache: boolean; timestamp: string; fetchedCount?: number; requestedCount?: number; warning?: string; totalCount?: number; cachedCount?: number; placeholderCount?: number }> {
     console.log('Making request to /api/fno/market-data');
-    const response: AxiosResponse<{ stocks: FNOStockData[]; fromCache: boolean; timestamp: string; fetchedCount?: number; requestedCount?: number; warning?: string }> = 
+    const response: AxiosResponse<{ stocks: FNOStockData[]; fromCache: boolean; timestamp: string; fetchedCount?: number; requestedCount?: number; warning?: string; totalCount?: number; cachedCount?: number; placeholderCount?: number }> = 
       await this.api.get('/api/fno/market-data', {
         timeout: 30000 // 30 second timeout for FNO market data
       });

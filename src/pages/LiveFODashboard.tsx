@@ -97,36 +97,50 @@ const LiveFODashboard = () => {
       console.log('Summary response:', summaryResponse);
 
       if (marketDataResponse && marketDataResponse.stocks) {
-        // Filter out placeholder data (symbols with spot = 0)
-        const validStocks = marketDataResponse.stocks.filter(stock => stock.spot > 0);
+        // Show ALL symbols including those with spot = 0 (cached/placeholder data)
+        // This ensures users see all symbols even if some failed to fetch
+        const allStocks = marketDataResponse.stocks;
+        const validStocks = allStocks.filter(stock => stock.spot > 0);
+        const placeholderStocks = allStocks.filter(stock => stock.spot === 0);
         
-        if (validStocks.length > 0) {
-          setStocks(validStocks);
-          if (summaryResponse && summaryResponse.summary) {
-            setMarketSummary(summaryResponse.summary);
-          }
-          setLastUpdate(new Date());
+        // Set all stocks (including placeholders)
+        setStocks(allStocks);
+        
+        if (summaryResponse && summaryResponse.summary) {
+          setMarketSummary(summaryResponse.summary);
+        }
+        setLastUpdate(new Date());
+        
+        // Show info message about data sources
+        if (marketDataResponse.fetchedCount && marketDataResponse.requestedCount) {
+          const fetched = marketDataResponse.fetchedCount;
+          const requested = marketDataResponse.requestedCount;
+          const cached = marketDataResponse.cachedCount || 0;
+          const placeholders = marketDataResponse.placeholderCount || 0;
           
-          // Show warning if we have placeholder data or warning message
-          if (marketDataResponse.warning) {
-            setError(marketDataResponse.warning);
-          } else {
-            setError(null);
-          }
-          
-          // Show info message if we got partial data
-          if (marketDataResponse.fetchedCount && marketDataResponse.requestedCount) {
-            const fetched = marketDataResponse.fetchedCount;
-            const requested = marketDataResponse.requestedCount;
+          if (fetched < requested || cached > 0 || placeholders > 0) {
+            const messages = [];
             if (fetched < requested) {
-              console.log(`Got ${fetched} out of ${requested} symbols - showing partial data`);
+              messages.push(`${fetched} newly fetched`);
             }
+            if (cached > 0) {
+              messages.push(`${cached} from cache`);
+            }
+            if (placeholders > 0) {
+              messages.push(`${placeholders} pending`);
+            }
+            console.log(`Showing ${allStocks.length} symbols: ${messages.join(', ')}`);
           }
+        }
+        
+        // Show warning if we have placeholder data or warning message
+        if (marketDataResponse.warning) {
+          setError(marketDataResponse.warning);
+        } else if (placeholderStocks.length > 0 && validStocks.length === 0) {
+          // Only show error if ALL stocks are placeholders
+          setError('No market data available at the moment. The market might be closed or data is temporarily unavailable.');
         } else {
-          // No valid data - show warning message
-          const warningMsg = marketDataResponse.warning || 'No market data available at the moment. The market might be closed or data is temporarily unavailable.';
-          setError(warningMsg);
-          setStocks([]);
+          setError(null);
         }
       } else {
         console.warn('Invalid response structure from API');
@@ -526,6 +540,19 @@ const LiveFODashboard = () => {
         </div>
       )}
 
+      {/* Data Source Info */}
+      {stocks.length > 0 && (
+        <div className="bg-gray-800 p-3 rounded-lg mb-6 text-sm">
+          <div className="flex items-center gap-4 text-gray-400">
+            <span className="font-semibold text-gray-300">Total Symbols: {stocks.length}</span>
+            <span className="text-green-400">✓ {stocks.filter(s => s.spot > 0).length} with data</span>
+            {stocks.filter(s => s.spot === 0).length > 0 && (
+              <span className="text-yellow-400">⚠ {stocks.filter(s => s.spot === 0).length} pending</span>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Symbol Selector for Option Chain */}
       <div className="bg-gray-800 p-4 rounded-lg mb-6">
         <div className="flex gap-4 items-center flex-wrap">
@@ -749,15 +776,28 @@ const LiveFODashboard = () => {
           <tbody>
             {filteredStocks.map((stock) => (
               <React.Fragment key={stock.symbol}>
-                <tr className="border-t border-gray-700 hover:bg-gray-750">
-                  <td className="px-4 py-2 font-semibold text-blue-400">{stock.symbol}</td>
-                  <td className="px-4 py-2 text-right">{stock.spot.toFixed(2)}</td>
-                  <td className={`px-4 py-2 text-right ${stock.change >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                    {stock.change >= 0 ? <TrendingUp className="inline w-4 h-4 mr-1" /> : 
-                     <TrendingDown className="inline w-4 h-4 mr-1" />}
-                    {stock.changePercent}%
+                <tr className={`border-t border-gray-700 hover:bg-gray-750 ${stock.spot === 0 ? 'opacity-60' : ''}`}>
+                  <td className="px-4 py-2 font-semibold text-blue-400">
+                    {stock.symbol}
+                    {stock.spot === 0 && <span className="ml-2 text-xs text-gray-500">(No data)</span>}
                   </td>
-                  <td className="px-4 py-2 text-right">{(stock.volume / 1000000).toFixed(2)}M</td>
+                  <td className="px-4 py-2 text-right">
+                    {stock.spot > 0 ? stock.spot.toFixed(2) : <span className="text-gray-500">-</span>}
+                  </td>
+                  <td className={`px-4 py-2 text-right ${stock.spot > 0 ? (stock.change >= 0 ? 'text-green-400' : 'text-red-400') : 'text-gray-500'}`}>
+                    {stock.spot > 0 ? (
+                      <>
+                        {stock.change >= 0 ? <TrendingUp className="inline w-4 h-4 mr-1" /> : 
+                         <TrendingDown className="inline w-4 h-4 mr-1" />}
+                        {stock.changePercent}%
+                      </>
+                    ) : (
+                      <span>-</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-2 text-right">
+                    {stock.spot > 0 ? ((stock.volume / 1000000).toFixed(2) + 'M') : <span className="text-gray-500">-</span>}
+                  </td>
                   <td className="px-4 py-2 text-right">
                     {stock.iv > 0 ? `${stock.iv.toFixed(1)}%` : <span className="text-gray-500">N/A</span>}
                   </td>
@@ -770,15 +810,19 @@ const LiveFODashboard = () => {
                     }
                   </td>
                   <td className="px-4 py-2 text-center">
-                    <button
-                      onClick={() => toggleChainExpansion(stock.symbol)}
-                      className="p-1 hover:bg-gray-600 rounded"
-                    >
-                      {expandedChains[stock.symbol] ? 
-                        <ChevronUp className="w-4 h-4" /> : 
-                        <ChevronDown className="w-4 h-4" />
-                      }
-                    </button>
+                    {stock.spot > 0 ? (
+                      <button
+                        onClick={() => toggleChainExpansion(stock.symbol)}
+                        className="p-1 hover:bg-gray-600 rounded"
+                      >
+                        {expandedChains[stock.symbol] ? 
+                          <ChevronUp className="w-4 h-4" /> : 
+                          <ChevronDown className="w-4 h-4" />
+                        }
+                      </button>
+                    ) : (
+                      <span className="text-gray-500 text-xs">-</span>
+                    )}
                   </td>
                 </tr>
                 
